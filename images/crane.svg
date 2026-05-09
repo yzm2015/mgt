@@ -1,0 +1,52 @@
+<!-- 起重机 SVG 资源 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="300">
+  <defs>
+    <!-- 渐变定义 -->
+    <linearGradient id="crane-body-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FF0000;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#8B0000;stop-opacity:1"/>
+    </linearGradient>
+    
+    <linearGradient id="cabin-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#4169E1;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#000080;stop-opacity:1"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- 起重机底座 -->
+  <rect x="60" y="200" width="80" height="100" fill="url(#crane-body-grad)" stroke="#333" stroke-width="3"/>
+  
+  <!-- 履带 -->
+  <ellipse cx="80" cy="300" rx="20" ry="10" fill="#333" stroke="#000" stroke-width="2"/>
+  <ellipse cx="120" cy="300" rx="20" ry="10" fill="#333" stroke="#000" stroke-width="2"/>
+  
+  <!-- 驾驶室 -->
+  <rect x="70" y="160" width="60" height="40" fill="url(#cabin-grad)" stroke="#333" stroke-width="2"/>
+  <rect x="80" y="170" width="20" height="15" fill="#87CEEB" stroke="#333" stroke-width="1"/>
+  
+  <!-- 起重臂 -->
+  <rect x="95" y="50" width="10" height="150" fill="#333" stroke="#000" stroke-width="2"/>
+  
+  <!-- 滑轮 -->
+  <circle cx="100" cy="50" r="8" fill="#666" stroke="#000" stroke-width="2"/>
+  
+  <!-- 绳索（动态，由代码绘制）-->
+  <line id="rope" x1="100" y1="50" x2="100" y2="150" stroke="#333" stroke-width="2"/>
+  
+  <!-- 磁铁 -->
+  <g id="magnet">
+    <circle id="magnet-core" cx="100" cy="150" r="15" fill="#0000FF" stroke="#333" stroke-width="2"/>
+    <path d="M 85 150 L 85 160 M 92 150 L 92 160 M 100 150 L 100 160 M 108 150 L 108 160 M 115 150 L 115 160" 
+          stroke="#00FF00" stroke-width="2" opacity="0.7"/>
+  </g>
+  
+  <!-- 激活状态磁铁 -->
+  <g id="magnet-active" opacity="0">
+    <circle cx="100" cy="150" r="15" fill="#00FF00" stroke="#333" stroke-width="2"/>
+    <path d="M 85 150 L 85 160 M 92 150 L 92 160 M 100 150 L 100 160 M 108 150 L 108 160 M 115 150 L 115 160" 
+          stroke="#FFD700" stroke-width="2" opacity="0.7"/>
+  </g>
+  
+  <!-- 吸附范围指示（调试用）-->
+  <circle id="attract-range" cx="100" cy="150" r="40" fill="none" stroke="#00FF00" stroke-width="1" stroke-dasharray="5,5" opacity="0.3"/>
+</svg>

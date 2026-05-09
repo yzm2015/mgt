@@ -1,0 +1,66 @@
+<!-- 背景元素 SVG 资源 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600">
+  <!-- 云朵 -->
+  <g id="cloud-1">
+    <ellipse cx="100" cy="80" rx="30" ry="18" fill="rgba(255,255,255,0.8)"/>
+    <ellipse cx="130" cy="75" rx="40" ry="25" fill="rgba(255,255,255,0.8)"/>
+    <ellipse cx="160" cy="80" rx="30" ry="18" fill="rgba(255,255,255,0.8)"/>
+  </g>
+  
+  <g id="cloud-2">
+    <ellipse cx="300" cy="120" rx="20" ry="12" fill="rgba(255,255,255,0.6)"/>
+    <ellipse cx="320" cy="115" rx="30" ry="18" fill="rgba(255,255,255,0.6)"/>
+    <ellipse cx="340" cy="120" rx="20" ry="12" fill="rgba(255,255,255,0.6)"/>
+  </g>
+  
+  <!-- 城市主题背景 -->
+  <g id="city-theme">
+    <!-- 天空渐变 -->
+    <defs>
+      <linearGradient id="sky-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" style="stop-color:#87CEEB;stop-opacity:1"/>
+        <stop offset="100%" style="stop-color:#E0EFFF;stop-opacity:1"/>
+      </linearGradient>
+    </defs>
+    <rect x="0" y="0" width="800" height="550" fill="url(#sky-gradient)"/>
+    
+    <!-- 地面 -->
+    <rect x="0" y="550" width="800" height="50" fill="#8B4513"/>
+    <rect x="0" y="550" width="800" height="10" fill="#228B22"/>
+    
+    <!-- 简单建筑剪影 -->
+    <rect x="50" y="400" width="60" height="150" fill="#A9A9A9" opacity="0.3"/>
+    <rect x="120" y="350" width="40" height="200" fill="#696969" opacity="0.3"/>
+    <rect x="170" y="420" width="70" height="130" fill="#A9A9A9" opacity="0.3"/>
+  </g>
+  
+  <!-- 沙漠主题背景 -->
+  <g id="desert-theme">
+    <defs>
+      <linearGradient id="desert-sky" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" style="stop-color:#F4D19F;stop-opacity:1"/>
+        <stop offset="100%" style="stop-color:#FFD700;stop-opacity:1"/>
+      </linearGradient>
+    </defs>
+    <rect x="0" y="0" width="800" height="550" fill="url(#desert-sky)"/>
+    
+    <!-- 沙漠地面 -->
+    <rect x="0" y="550" width="800" height="50" fill="#DAA520"/>
+    <ellipse cx="200" cy="555" rx="100" ry="5" fill="#F4A460" opacity="0.5"/>
+    <ellipse cx="600" cy="560" rx="80" ry="4" fill="#F4A460" opacity="0.5"/>
+  </g>
+  
+  <!-- 雪地主题背景 -->
+  <g id="snow-theme">
+    <rect x="0" y="0" width="800" height="550" fill="#E0EFFF"/>
+    <rect x="0" y="550" width="800" height="50" fill="#F5F5F5"/>
+    <rect x="0" y="550" width="800" height="10" fill="#FFFFFF"/>
+    
+    <!-- 雪花装饰 -->
+    <circle cx="100" cy="200" r="2" fill="#FFFFFF" opacity="0.8"/>
+    <circle cx="250" cy="150" r="1.5" fill="#FFFFFF" opacity="0.8"/>
+    <circle cx="400" cy="300" r="2" fill="#FFFFFF" opacity="0.8"/>
+    <circle cx="600" cy="100" r="1.5" fill="#FFFFFF" opacity="0.8"/>
+    <circle cx="700" cy="250" r="2" fill="#FFFFFF" opacity="0.8"/>
+  </g>
+</svg>
