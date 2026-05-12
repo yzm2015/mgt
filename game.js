@@ -166,14 +166,14 @@ function init() {
     audioManager.init();
 
     // 修正起重机位置和绳长
-    crane.crane.y = SA.safeTop + SA.s(10);
+    crane.crane.y = SA.safeTop + SA.s(5);
     crane.crane.x = canvas.width / 2;
-    // 绳长设为能到达建筑区域
-    crane.pendulum.ropeLength = canvas.height - SA.safeTop - SA.s(130);
+    // 绳长：画面35%左右，磁铁悬浮在建筑上方
+    crane.pendulum.ropeLength = Math.floor(canvas.height * 0.32);
     crane.magnet.x = crane.crane.x;
     crane.magnet.y = crane.crane.y + crane.crane.height + crane.pendulum.ropeLength;
-    // 增大吸附范围
-    crane.magnet.attractRadius = SA.s(120);
+    // 吸附范围覆盖到地面建筑
+    crane.magnet.attractRadius = canvas.height * 0.5;
 
     gameState.currentScene = 'menu';
     NPC.queueDialogue('welcome');
@@ -334,9 +334,10 @@ function handleGameTouch(x, y, isTap) {
         crane.magnet.isGrabbing = true;
         crane.magnet.grabbedBlock = best;
         best.isGrabbed = true;
-        // 把磁铁移到方块上方
-        crane.magnet.x = best.x + best.width/2;
-        crane.magnet.y = best.y;
+        // 方块飞向磁铁位置（而非磁铁移到方块）
+        best.x = crane.magnet.x - best.width/2;
+        best.y = crane.magnet.y + crane.magnet.radius;
+        // 起重机移到方块所在列
         crane.crane.x = crane.magnet.x;
         crane.pendulum.angle = 0;
         crane.pendulum.angularVelocity = 0;
@@ -370,8 +371,10 @@ function loadLevel(level) {
 
   // 重置起重机
   crane.crane.x = canvas.width / 2;
+  crane.pendulum.ropeLength = Math.floor(canvas.height * 0.32);
   crane.magnet.x = crane.crane.x;
   crane.magnet.y = crane.crane.y + crane.crane.height + crane.pendulum.ropeLength;
+  crane.magnet.attractRadius = canvas.height * 0.5;
   crane.magnet.isActive = false;
   crane.magnet.isGrabbing = false;
   crane.magnet.grabbedBlock = null;

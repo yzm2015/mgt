@@ -93,10 +93,10 @@ class CraneController {
    */
   updateMagnetPosition() {
     if (this.magnet.isGrabbing && this.magnet.grabbedBlock) {
-      // 磁铁跟随钟摆
+      // 磁铁跟随钟摆，方块挂在磁铁下方
       const block = this.magnet.grabbedBlock;
       block.x = this.magnet.x - block.width / 2;
-      block.y = this.magnet.y - block.height / 2;
+      block.y = this.magnet.y + this.magnet.radius + 2; // 方块挂在磁铁正下方
     } else if (!this.magnet.isGrabbing) {
       // 磁铁静止在起重机下方
       this.magnet.x = this.crane.x;
