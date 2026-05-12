@@ -17,7 +17,7 @@ class AudioGenerator {
     if (this.initialized) return;
     
     try {
-      // 创建音频上下文（浏览器版本）
+      // 创建音频上下文
       if (typeof wx !== 'undefined') {
         // 微信小游戏环境（使用微信音频 API）
         this.initialized = true;
@@ -26,8 +26,13 @@ class AudioGenerator {
       }
       
       // 浏览器环境
-      const AudioContext = window.AudioContext || window.webkitAudioContext;
-      this.audioContext = new AudioContext();
+      var AudioContextCls = (typeof AudioContext !== 'undefined') ? AudioContext :
+                            (typeof webkitAudioContext !== 'undefined') ? webkitAudioContext : null;
+      if (!AudioContextCls) {
+        console.warn('AudioContext不可用，音效已禁用');
+        return;
+      }
+      this.audioContext = new AudioContextCls();
       
       // 创建主音量控制
       this.masterGain = this.audioContext.createGain();

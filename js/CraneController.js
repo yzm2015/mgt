@@ -270,11 +270,19 @@ class CraneController {
     // 绘制吸附范围（调试用）
     if (this.magnet.isActive && !this.magnet.grabbedBlock) {
       ctx.strokeStyle = 'rgba(0, 0, 255, 0.3)';
-      ctx.setLineDash([5, 5]);
+      try {
+        if (typeof ctx.setLineDash === 'function') {
+          ctx.setLineDash([5, 5]);
+        }
+      } catch (e) { /* ignore */ }
       ctx.beginPath();
       ctx.arc(this.magnet.x, this.magnet.y, this.magnet.attractRadius, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.setLineDash([]);
+      try {
+        if (typeof ctx.setLineDash === 'function') {
+          ctx.setLineDash([]);
+        }
+      } catch (e) { /* ignore */ }
     }
     
     // 绘制磁力线效果

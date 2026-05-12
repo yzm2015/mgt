@@ -35,7 +35,8 @@ class AudioManager {
       this.sounds[name] = audio;
     } else {
       // 浏览器环境（用于测试）
-      const audio = new Audio(src);
+      const audio = wx.createInnerAudioContext();
+      audio.src = src;
       this.sounds[name] = audio;
     }
   }
@@ -85,7 +86,8 @@ class AudioManager {
       }
     } else {
       // 浏览器环境
-      this.bgm = new Audio(src);
+      this.bgm = wx.createInnerAudioContext();
+      this.bgm.src = src;
       this.bgm.loop = loop;
       this.bgm.volume = this.bgmVolume;
       
