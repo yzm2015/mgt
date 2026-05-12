@@ -1,14 +1,13 @@
 /**
- * 磁吸拆迁队 V3.0.2
+ * 磁吸拆迁队 V3.1.3
  * 版本规则：每次+0.0.1，逢十进一
  *
- * V3.0.2 更新：
- * - 微信自动登录 + 授权回退
- * - 性能全面优化（对象池/shadowBlur/离屏Canvas/首屏加速）
- * - 科技感动画（扫描线/脉冲/磁力场/拖尾）
- * - 关卡选择UI重做（圆角卡片/滑动翻页/兼容刘海屏）
- * - 玩法效果增强（慢动作/震屏升级/连击特效）
- * - 用户粘性（每日奖励/成就系统/连续登录）
+ * V3.1.3 更新：
+ * - 排行榜：恢复人名列，按(人名+关卡)去重保留最高分
+ * - TNT只炸1个最近建筑 + 爆炸波纹/火焰特效
+ * - 拆迁工具放在建筑上方 + 未投掷前不碰撞计分
+ * - 礼物/祝福语动画大幅增强（发光环/浮动/大号文字/收集特效）
+ * - 界面优化：建筑纹理/地面渐变/大气雾效/火焰粒子/发光血条
  */
 
 var PhysicsSystem = require('./js/PhysicsSystem');
@@ -17,7 +16,7 @@ var BuildingGenerator = require('./js/BuildingGenerator');
 var AudioManager = require('./js/AudioManager').AudioManager;
 var SoundNames = require('./js/AudioManager').SoundNames;
 
-var VERSION = '3.1.2';
+var VERSION = '3.1.3';
 
 // ===== 配色（统一管理）=====
 var C = {
@@ -67,7 +66,9 @@ var gs = {
   peakSwingAV: 0,      // 本次抓取中的最大摆动角速度
   powerUpHardness: 0,   // 强化工具剩余次数
   // V3.1.0: 礼物系统
-  gifts: []             // 场景中的礼物对象
+  gifts: [],             // 场景中的礼物对象
+  // V3.1.3: 爆炸特效
+  explosionEffects: []   // 爆炸波纹效果
 };
 
 // ===== 对象池（减少GC压力）=====
@@ -75,7 +76,7 @@ var Pool = {
   particles: [],
   floats: [],
   getParticle: function(){ return this.particles.length>0?this.particles.pop():{}; },
-  recycleParticle: function(p){ p.x=0;p.y=0;p.vx=0;p.vy=0;p.life=0;p.color=null; this.particles.push(p); },
+  recycleParticle: function(p){ p.x=0;p.y=0;p.vx=0;p.vy=0;p.life=0;p.color=null;p.sz=0;p.t=null;p.rot=null;p.rs=null;p.ml=0; this.particles.push(p); },
   getFloat: function(){ return this.floats.length>0?this.floats.pop():{}; },
   recycleFloat: function(f){ f.x=0;f.y=0;f.t='';f.c=null;f.life=0;f.vy=0; this.floats.push(f); }
 };
@@ -198,22 +199,26 @@ var GIFT_DEFS = [
     desc:['运气爆棚!','太棒了!','势如破竹!','拆迁之王!','无人能挡!'],
     apply:function(cx,cy){
       var msg=this.desc[Math.floor(Math.random()*this.desc.length)];
-      addFloat(cx,cy-S.s(30),msg,this.color);
-      gs.score+=5;addFloat(cx,cy-S.s(50),'+5',C.neonGreen);
+      addBigFloat(cx,cy-S.s(30),msg,this.color); // V3.1.3: 大号祝福文字
+      gs.score+=5;addFloat(cx,cy-S.s(60),'+5',C.neonGreen);
+      spawnSparks(cx,cy,this.color,6);
+      try{wx.vibrateShort({type:'light'});}catch(e){}
     }
   },
   { id:'powerUp', name:'强化', emoji:'⚡', color:'#00FF88', weight:20,
     apply:function(cx,cy){
-      gs.powerUpHardness+=3; // 下3次投掷硬度+1
-      addFloat(cx,cy-S.s(30),'⚡工具强化×3!','#00FF88');
-      spawnSparks(cx,cy,C.neonGreen,6);
+      gs.powerUpHardness+=3;
+      addBigFloat(cx,cy-S.s(30),'⚡工具强化×3!','#00FF88');
+      spawnSparks(cx,cy,C.neonGreen,8);
+      gs.flash=0.05;
       try{wx.vibrateShort({type:'medium'});}catch(e){}
     }
   },
   { id:'extraTime', name:'加时', emoji:'⏰', color:'#00F0FF', weight:20,
     apply:function(cx,cy){
       gs.timeLeft+=8;
-      addFloat(cx,cy-S.s(30),'⏰+8秒!','#00F0FF');
+      addBigFloat(cx,cy-S.s(30),'⏰+8秒!','#00F0FF');
+      spawnSparks(cx,cy,C.neonCyan,4);
     }
   },
   { id:'randomBoom', name:'爆破', emoji:'💥', color:'#FF3366', weight:15,
@@ -224,20 +229,21 @@ var GIFT_DEFS = [
         var target=alive[Math.floor(Math.random()*alive.length)];
         target.health=0;target.isDestroyed=true;
         var tx=target.x+target.width/2,ty2=target.y+target.height/2;
-        spawnDebris(tx,ty2,target.color||C.neonRed,6);
-        spawnSparks(tx,ty2,C.neonYellow,4);
+        spawnDebris(tx,ty2,target.color||C.neonRed,8);
+        spawnSparks(tx,ty2,C.neonYellow,6);
         var bp=Math.max(1,target.score||10);
         gs.score+=bp;
         addFloat(tx,ty2,'💥+'+bp,C.neonRed);
-        gs.shake=8;
+        gs.shake=10;
+        spawnExplosion(tx,ty2); // V3.1.3: 爆破也有爆炸特效
         addCollapse(target);
       }
-      addFloat(cx,cy-S.s(30),'💥随机爆破!','#FF3366');
+      addBigFloat(cx,cy-S.s(30),'💥随机爆破!','#FF3366');
+      gs.flash=0.08;
     }
   },
   { id:'addBuilding', name:'增建', emoji:'🏗️', color:'#B44AFF', weight:10,
     apply:function(cx,cy){
-      // 随机在场景中添加一个方块（更多分数机会）
       var gy=canvas.height-S.s(50);
       var bw=S.s(45),bh=S.s(38);
       var nx=S.s(20)+Math.random()*(canvas.width-bw-S.s(40));
@@ -252,8 +258,8 @@ var GIFT_DEFS = [
         mass:bdef.mass,score:bdef.score+5,friction:bdef.friction,
         velocityX:0,velocityY:0,isGrabbed:false,isDestroyed:false,explosive:false
       });
-      addFloat(cx,cy-S.s(30),'🏗️新增建筑!','#B44AFF');
-      spawnSparks(nx+bw/2,ny+bh/2,C.neonPurple,4);
+      addBigFloat(cx,cy-S.s(30),'🏗️新增建筑!','#B44AFF');
+      spawnSparks(nx+bw/2,ny+bh/2,C.neonPurple,6);
     }
   }
 ];
@@ -290,7 +296,7 @@ function updGifts(){
   }
 }
 
-// 礼物碰撞检测（工具碰到礼物就收集）
+// 礼物碰撞检测（V3.1.3: 增大收集范围+收集特效）
 function checkGiftCollect(){
   for(var i=0;i<gs.gifts.length;i++){
     var g=gs.gifts[i];
@@ -298,36 +304,92 @@ function checkGiftCollect(){
     for(var j=0;j<tools.length;j++){
       var t=tools[j];
       if(!t.isActive) continue;
-      // 简单距离检测
       var dx=(t.x+t.width/2)-g.x,dy=(t.y+t.height/2)-g.y;
-      if(Math.sqrt(dx*dx+dy*dy)<S.s(35)){
+      if(Math.sqrt(dx*dx+dy*dy)<S.s(45)){
         g.collected=true;
         g.def.apply(g.x,g.y);
         try{audio.playSound(SoundNames.DESTROY);}catch(e){}
-        spawnSparks(g.x,g.y,g.def.color,5);
+        spawnSparks(g.x,g.y,g.def.color,8);
+        // V3.1.3: 收集特效 - 扩散光环
+        gs.explosionEffects.push({x:g.x,y:g.y,radius:S.s(5),maxRadius:S.s(70),life:20,ml:20});
+        gs.flash=0.06;
+        try{wx.vibrateShort({type:'light'});}catch(e){}
       }
     }
   }
 }
 
-// 礼物渲染
+// 礼物渲染（V3.1.3: 大幅增强视觉感知）
 function drawGifts(){
   for(var i=0;i<gs.gifts.length;i++){
     var g=gs.gifts[i];
     if(g.collected) continue;
     var alpha=g.life<20?g.life/20:1;
+    var floatY=Math.sin(frame*0.1+i*1.5)*S.s(5); // V3.1.3: 浮动动画
     ctx.save();ctx.globalAlpha=alpha;
-    // 发光背景
-    ctx.fillStyle=hex2rgba(g.def.color,0.15);
-    ctx.beginPath();ctx.arc(g.x,g.y,S.s(18),0,Math.PI*2);ctx.fill();
-    // emoji
-    ctx.font=S.s(22)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
-    ctx.fillText(g.def.emoji,g.x,g.y);
-    // 名称
-    ctx.fillStyle=g.def.color;ctx.font='bold '+S.s(8)+'px Arial';
-    ctx.fillText(g.def.name,g.x,g.y+S.s(16));
+    // 大发光背景
+    ctx.fillStyle=hex2rgba(g.def.color,0.2);
+    ctx.beginPath();ctx.arc(g.x,g.y+floatY,S.s(30),0,Math.PI*2);ctx.fill();
+    // 脉冲环
+    var ringR=S.s(24)+Math.sin(gs.pulseTime*4)*S.s(5);
+    ctx.strokeStyle=hex2rgba(g.def.color,0.5*alpha);
+    ctx.lineWidth=S.s(2);
+    ctx.beginPath();ctx.arc(g.x,g.y+floatY,ringR,0,Math.PI*2);ctx.stroke();
+    // 外圈
+    ctx.strokeStyle=hex2rgba(g.def.color,0.2*alpha);
+    ctx.lineWidth=S.s(1);
+    ctx.beginPath();ctx.arc(g.x,g.y+floatY,ringR+S.s(8),0,Math.PI*2);ctx.stroke();
+    // 大emoji
+    ctx.font=S.s(32)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(g.def.emoji,g.x,g.y+floatY);
+    // 名称（发光）
+    ctx.shadowColor=g.def.color;ctx.shadowBlur=8;
+    ctx.fillStyle=g.def.color;ctx.font='bold '+S.s(12)+'px Arial';
+    ctx.fillText(g.def.name,g.x,g.y+floatY+S.s(24));
+    ctx.shadowBlur=0;
     ctx.restore();
   }
+}
+
+// V3.1.3: 爆炸特效
+function spawnExplosion(x,y){
+  gs.explosionEffects.push({x:x,y:y,radius:S.s(10),maxRadius:S.s(130),life:30,ml:30});
+  for(var i=0;i<12;i++){
+    var p=Pool.getParticle();
+    var a=Math.random()*Math.PI*2,s=3+Math.random()*6;
+    p.x=x;p.y=y;p.vx=Math.cos(a)*s;p.vy=Math.sin(a)*s-3;
+    p.life=20+Math.random()*15;p.ml=35;
+    p.color=i%2===0?C.neonRed:C.neonOrange;p.sz=4+Math.random()*5;p.t='fire';
+    particles.push(p);
+  }
+}
+function updExplosionEffects(){
+  for(var i=gs.explosionEffects.length-1;i>=0;i--){
+    var e=gs.explosionEffects[i];
+    e.radius+=(e.maxRadius-e.radius)*0.15;
+    e.life--;
+    if(e.life<=0)gs.explosionEffects.splice(i,1);
+  }
+}
+function drawExplosionEffects(){
+  for(var i=0;i<gs.explosionEffects.length;i++){
+    var e=gs.explosionEffects[i];
+    var a=e.life/e.ml;
+    ctx.strokeStyle=hex2rgba(C.neonRed,a*0.6);
+    ctx.lineWidth=S.s(3)*a;
+    ctx.beginPath();ctx.arc(e.x,e.y,e.radius,0,Math.PI*2);ctx.stroke();
+    ctx.strokeStyle=hex2rgba(C.neonYellow,a*0.3);
+    ctx.lineWidth=S.s(1.5)*a;
+    ctx.beginPath();ctx.arc(e.x,e.y,e.radius*0.6,0,Math.PI*2);ctx.stroke();
+    // 爆炸光晕
+    ctx.fillStyle=hex2rgba(C.neonOrange,a*0.08);
+    ctx.beginPath();ctx.arc(e.x,e.y,e.radius*0.4,0,Math.PI*2);ctx.fill();
+  }
+}
+
+// V3.1.3: 大号浮动文字（祝福语等）
+function addBigFloat(x,y,t,c){
+  var f=Pool.getFloat();f.x=x;f.y=y;f.t=t;f.c=c;f.life=75;f.vy=-1.2;f.big=true;floats.push(f);
 }
 
 var canvas, ctx, physics, crane, bg, audio;
@@ -548,25 +610,34 @@ function loadFriendScores() {
 }
 
 function loadWorldScores() {
-  // V3.1.2: 我的排行 - 按关卡显示，不重复人名
+  // V3.1.3: 我的排行 - 按关卡显示，包含人名，同一人同一关卡只保留最高分
   gs.worldScores = [];
   try {
     var all = [];
     var keys = Object.keys(progress.levels);
+    var uname = (gs.userInfo && gs.userInfo.nickName) || '我';
     for (var i = 0; i < keys.length; i++) {
       var lv = keys[i];
       var data = progress.levels[lv];
       if (data && data.score > 0) {
-        all.push({ level: parseInt(lv), score: data.score, stars: data.stars || 0 });
+        all.push({ name: uname, level: parseInt(lv), score: data.score, stars: data.stars || 0 });
       }
     }
-    all.sort(function(a, b) { return b.score - a.score; });
-    for (var j = 0; j < Math.min(all.length, 20); j++) {
-      gs.worldScores.push({
-        score: all[j].score,
-        level: all[j].level,
-        stars: all[j].stars
-      });
+    // 按人名+关卡去重（保留最高分）
+    var seen = {};
+    var deduped = [];
+    for (var j = 0; j < all.length; j++) {
+      var key = all[j].name + '_' + all[j].level;
+      if (!seen[key]) {
+        seen[key] = deduped.length;
+        deduped.push(all[j]);
+      } else if (all[j].score > deduped[seen[key]].score) {
+        deduped[seen[key]] = all[j];
+      }
+    }
+    deduped.sort(function(a, b) { return b.score - a.score; });
+    for (var k = 0; k < Math.min(deduped.length, 20); k++) {
+      gs.worldScores.push(deduped[k]);
     }
   } catch(e) {}
 }
@@ -697,7 +768,7 @@ function update() {
   // 工具物理更新
   for(var i=0;i<tools.length;i++){
     var t=tools[i];
-    if(t.isGrabbed||!t.isActive) continue;
+    if(t.isGrabbed||!t.isActive||!t._thrown) continue; // V3.1.3: 未投掷工具不参与物理
     // 限速
     t.velocityY = Math.max(-8, Math.min(8, t.velocityY + 0.4));
     t.velocityX = Math.max(-10, Math.min(10, t.velocityX));
@@ -730,10 +801,10 @@ function update() {
           try{audio.playSound(SoundNames.CRASH);}catch(e){}
           spawnSparks(cx,cy,bld.color||C.neonOrange,4);
           addFloat(cx,cy-S.s(10),Math.floor(actualDmg)+'伤害',C.neonOrange);
-          // V3.1.2: 每次碰撞也有小概率掉祝福语（不用摧毁）
-          if(Math.random()<0.12){
-            var msgs=['加油!','漂亮!','继续!','好球!','Nice!'];
-            addFloat(cx,cy-S.s(25),msgs[Math.floor(Math.random()*msgs.length)],C.neonYellow);
+          // V3.1.3: 每次碰撞也有小概率掉祝福语（更大更醒目）
+          if(Math.random()<0.15){
+            var msgs=['加油!','漂亮!','继续!','好球!','Nice!','超赞!','再来!'];
+            addBigFloat(cx,cy-S.s(25),msgs[Math.floor(Math.random()*msgs.length)],C.neonYellow);
           }
           if(bld.health<=0){
             bld.health=0;bld.isDestroyed=true;
@@ -766,14 +837,31 @@ function update() {
             // V3.1.0: 礼物掉落
             tryDropGift(cx,cy);
             if(bld.explosive){
-              gs.shake=12;gs.flash=0.2;
-              spawnDebris(cx,cy,C.neonRed,8);spawnSparks(cx,cy,C.neonYellow,6);
-              var bonusPts=0;
-              for(var k=0;k<buildings.length;k++){var bk=buildings[k];if(bk.isDestroyed||bk===bld)continue;
+              // V3.1.3: TNT只炸1个最近建筑 + 爆炸特效
+              gs.shake=15;gs.flash=0.3;
+              spawnDebris(cx,cy,C.neonRed,10);spawnSparks(cx,cy,C.neonYellow,8);
+              // 找最近1个存活建筑（排除自身）
+              var nearestBld=null,nearestDist=999;
+              for(var k=0;k<buildings.length;k++){
+                var bk=buildings[k];if(bk.isDestroyed||bk===bld)continue;
                 var dx2=(bk.x+bk.width/2)-cx,dy2=(bk.y+bk.height/2)-cy;
-                if(Math.sqrt(dx2*dx2+dy2*dy2)<120){bk.health-=40;if(bk.health<=0){bk.health=0;bk.isDestroyed=true;bonusPts+=Math.max(1,bk.score||10);spawnDebris(bk.x+bk.width/2,bk.y+bk.height/2,bk.color||C.neonRed,3);}}
+                var d2=Math.sqrt(dx2*dx2+dy2*dy2);
+                if(d2<nearestDist){nearestDist=d2;nearestBld=bk;}
               }
-              if(bonusPts>0){gs.score+=bonusPts;addFloat(cx,cy-S.s(35),'爆炸+'+bonusPts,C.neonRed);}
+              if(nearestBld){
+                nearestBld.health=0;nearestBld.isDestroyed=true;
+                var nx=nearestBld.x+nearestBld.width/2,ny2=nearestBld.y+nearestBld.height/2;
+                spawnDebris(nx,ny2,nearestBld.color||C.neonRed,8);
+                spawnSparks(nx,ny2,C.neonYellow,6);
+                var bp=Math.max(1,nearestBld.score||10);
+                gs.score+=bp;
+                addFloat(nx,ny2,'💥+'+bp,C.neonRed);
+                addCollapse(nearestBld);
+                // 二次爆炸波纹
+                spawnExplosion(nx,ny2);
+              }
+              spawnExplosion(cx,cy);
+              addFloat(cx,cy-S.s(35),'💣TNT爆炸!',C.neonRed);
             }
             addCollapse(bld);
           }
@@ -830,6 +918,7 @@ function update() {
           rt.x = rt.respawnX; rt.y = rt.respawnY;
           rt.velocityX = 0; rt.velocityY = 0;
           rt._stillTimer = 0;
+          rt._thrown=false; // V3.1.3: 重置投掷状态
           rt._swingBonus = undefined; // V3.1.1: 重置甩动加成
           rt._hitCD = undefined; // 重置碰撞CD
         }
@@ -841,6 +930,8 @@ function update() {
   // V3.1.0: 礼物系统更新
   updGifts();
   checkGiftCollect();
+  // V3.1.3: 爆炸特效更新
+  updExplosionEffects();
   // （得分已合并到上面碰撞处理中，不再单独调用checkToolHits）
   checkGameEnd();
 }
@@ -930,6 +1021,7 @@ function handleGame(x,y,isTap){
       if(block){
         block.velocityX=swingDir*swingPower;
         block.velocityY=-8;
+        block._thrown=true; // V3.1.3: 标记已投掷
         block.isGrabbed=false;
         block._swingBonus=swingBonus; // V3.1.0: 记录甩动加成，碰撞时使用
         gs.peakSwingAV=0; // 重置
@@ -986,7 +1078,6 @@ var TOOL_TYPES = {
 
 function generateTools(lv) {
   tools = [];
-  var groundY = canvas.height - S.s(50);
   var tw = S.s(40), th = S.s(40);
 
   // V3.1.2: 每关只给1个当前最强工具，避免画面混乱
@@ -997,8 +1088,24 @@ function generateTools(lv) {
   else if (lv >= 5) typeId = 'ironHammer';
 
   var td = TOOL_TYPES[typeId];
-  var startX = S.sx(15);
-  var startY = groundY - th - S.s(5);
+
+  // V3.1.3: 工具放在建筑上方，不放在地面
+  var startX, startY;
+  if (buildings.length > 0) {
+    var topY = canvas.height, topX = canvas.width / 2;
+    for (var bi = 0; bi < buildings.length; bi++) {
+      if (buildings[bi].y < topY) {
+        topY = buildings[bi].y;
+        topX = buildings[bi].x + buildings[bi].width / 2;
+      }
+    }
+    startX = topX - tw / 2;
+    startY = topY - th - S.s(8);
+  } else {
+    var groundY = canvas.height - S.s(50);
+    startX = S.sx(15);
+    startY = groundY - th - S.s(5);
+  }
 
   tools.push({
     type: typeId,
@@ -1019,7 +1126,8 @@ function generateTools(lv) {
     isGrabbed: false,
     isActive: true,
     respawnX: startX,
-    respawnY: startY
+    respawnY: startY,
+    _thrown: false  // V3.1.3: 未投掷不参与碰撞计分
   });
 }
 
@@ -1039,7 +1147,7 @@ function loadLevel(lv){
   gs.targetScore=bg.getTargetScore(lv);gs.timeLeft=bg.getTimeLimit(lv);
   gs.score=0;gs.gameActive=true;gs.gamePaused=false;gs.currentScene='game';
   gs.combo=0;gs.comboTimer=0;gs.slowMo=0;
-  gs.gifts=[];gs.peakSwingAV=0;gs.powerUpHardness=0; // V3.1.0: 重置礼物和强化
+  gs.gifts=[];gs.peakSwingAV=0;gs.powerUpHardness=0;gs.explosionEffects=[]; // V3.1.3: 重置爆炸特效
   particles.length=0;floats.length=0;
   crane.crane.x=canvas.width/2;crane.pendulum.ropeLength=Math.floor(S.h*0.25);
   crane.magnet.x=crane.crane.x;crane.magnet.y=crane.crane.y+crane.crane.height+crane.pendulum.ropeLength;
@@ -1281,18 +1389,30 @@ function renderGame(){
   // 游戏场景不画网格和扫描线，节省GPU
   drawCachedStars();
 
-  // 地面
+  // V3.1.3: 大气雾效 - 底部渐变
+  var fogG=grad(ctx,0,canvas.height-S.s(120),0,canvas.height);
+  if(fogG){fogG.addColorStop(0,'rgba(10,20,50,0)');fogG.addColorStop(0.6,'rgba(10,20,50,0.15)');fogG.addColorStop(1,'rgba(10,20,50,0.3)');ctx.fillStyle=fogG;ctx.fillRect(0,canvas.height-S.s(120),canvas.width,S.s(120));}
+
+  // 地面 - V3.1.3: 渐变地面更真实
   var gy=canvas.height-S.s(50);
-  ctx.fillStyle=C.ground;ctx.fillRect(0,gy,canvas.width,S.s(50));
-  ctx.strokeStyle=C.groundLine;ctx.lineWidth=S.s(1);ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(canvas.width,gy);ctx.stroke();
+  var gndG=grad(ctx,0,gy,0,canvas.height);
+  if(gndG){gndG.addColorStop(0,'#0a1830');gndG.addColorStop(0.3,'#0a1628');gndG.addColorStop(1,'#060e1c');ctx.fillStyle=gndG;}else ctx.fillStyle=C.ground;
+  ctx.fillRect(0,gy,canvas.width,S.s(50));
+  // 地面顶部发光线
+  ctx.strokeStyle=C.groundLine;ctx.lineWidth=S.s(1.5);ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(canvas.width,gy);ctx.stroke();
+  // V3.1.3: 地面网格线
+  ctx.strokeStyle='rgba(0,240,255,0.04)';ctx.lineWidth=S.s(0.5);
+  for(var gi=0;gi<canvas.width;gi+=S.s(30)){ctx.beginPath();ctx.moveTo(gi,gy);ctx.lineTo(gi,canvas.height);ctx.stroke();}
+  for(var gj=gy+S.s(15);gj<canvas.height;gj+=S.s(15)){ctx.beginPath();ctx.moveTo(0,gj);ctx.lineTo(canvas.width,gj);ctx.stroke();}
 
   drawBuildings();
   drawTools();
   drawCrane();
-  drawParticles();drawFloats();drawGifts(); // V3.1.0: 礼物渲染
+  drawParticles();drawFloats();drawGifts();drawExplosionEffects(); // V3.1.3: 爆炸特效
 
-  // 慢动作效果 - 仅HUD提示，不全屏色块
-  // (不画全屏半透明层，避免视觉干扰)
+  // V3.1.3: 顶部氛围光
+  var topG=grad(ctx,0,S.st,0,S.st+S.s(60));
+  if(topG){topG.addColorStop(0,'rgba(0,240,255,0.03)');topG.addColorStop(1,'rgba(0,240,255,0)');ctx.fillStyle=topG;ctx.fillRect(0,S.st,canvas.width,S.s(60));}
 
   if(gs.flash>.01){ctx.fillStyle='rgba(255,255,255,'+gs.flash+')';ctx.fillRect(0,0,canvas.width,canvas.height);}
   drawHUD();
@@ -1300,7 +1420,7 @@ function renderGame(){
   if(gs.gamePaused)drawPause();
 }
 
-// ===== 建筑（优化：减少shadowBlur使用）=====
+// ===== 建筑（V3.1.3: 增强纹理+科技感）=====
 function drawBuildings(){
   // 先画建筑群整体阴影/地基，让建筑更醒目
   var groundY = canvas.height - S.s(50);
@@ -1310,7 +1430,6 @@ function drawBuildings(){
   var visited = {};
   for(var bi=0;bi<buildings.length;bi++){
     if(buildings[bi].isDestroyed||visited[bi])continue;
-    // 用简单的X距离聚类
     var group={minX:9999,maxX:0,minY:9999,maxY:0};
     for(var bj=bi;bj<buildings.length;bj++){
       if(buildings[bj].isDestroyed||visited[bj])continue;
@@ -1329,15 +1448,15 @@ function drawBuildings(){
   // 画建筑底部阴影/地基
   buildingGroups.forEach(function(g){
     var pad=S.s(6);
-    // 地基发光
-    ctx.fillStyle='rgba(0,240,255,0.04)';
+    // V3.1.3: 地基发光更亮
+    ctx.fillStyle='rgba(0,240,255,0.06)';
     ctx.fillRect(g.minX-pad,groundY-S.s(4),g.maxX-g.minX+pad*2,S.s(4));
     // 建筑整体背景暗色衬底
-    ctx.fillStyle='rgba(10,20,50,0.3)';
+    ctx.fillStyle='rgba(10,20,50,0.35)';
     ctx.fillRect(g.minX-pad,g.minY-pad,g.maxX-g.minX+pad*2,g.maxY-g.minY+pad*2);
-    // 建筑标签
-    ctx.fillStyle=C.neonCyan;ctx.font=S.s(10)+'px Arial';ctx.textAlign='center';ctx.textBaseline='bottom';
-    ctx.fillText('▼ 建筑（可摧毁）',g.minX+(g.maxX-g.minX)/2,g.minY-pad-S.s(2));
+    // V3.1.3: 建筑标签更小
+    ctx.fillStyle=hex2rgba(C.neonCyan,0.5);ctx.font=S.s(8)+'px Arial';ctx.textAlign='center';ctx.textBaseline='bottom';
+    ctx.fillText('▼ 建筑',g.minX+(g.maxX-g.minX)/2,g.minY-pad-S.s(1));
   });
 
   // 画每个方块
@@ -1346,16 +1465,41 @@ function drawBuildings(){
     var hp=b.health/b.maxHealth;
     var bc=C[b.type]||C.wood;
 
-    // 方块主体
+    // V3.1.3: 方块主体带内发光
     ctx.fillStyle=bc.fill;ctx.fillRect(b.x,b.y,b.width,b.height);
+    // 内部渐变高光
+    var bG=grad(ctx,b.x,b.y,b.x,b.y+b.height);
+    if(bG){bG.addColorStop(0,'rgba(255,255,255,0.1)');bG.addColorStop(0.4,'rgba(255,255,255,0)');bG.addColorStop(1,'rgba(0,0,0,0.1)');ctx.fillStyle=bG;ctx.fillRect(b.x,b.y,b.width,b.height);}
 
-    // 边框
+    // V3.1.3: 纹理效果
+    ctx.strokeStyle='rgba(255,255,255,0.06)';ctx.lineWidth=S.s(0.5);
+    if(b.type==='wood'){
+      // 木纹
+      for(var wi=1;wi<4;wi++){ctx.beginPath();ctx.moveTo(b.x+S.s(3),b.y+b.height*wi/4);ctx.lineTo(b.x+b.width-S.s(3),b.y+b.height*wi/4);ctx.stroke();}
+    }else if(b.type==='brick'){
+      // 砖纹
+      for(var bri=1;bri<3;bri++){ctx.beginPath();ctx.moveTo(b.x,b.y+b.height*bri/3);ctx.lineTo(b.x+b.width,b.y+b.height*bri/3);ctx.stroke();}
+      ctx.beginPath();ctx.moveTo(b.x+b.width/2,b.y);ctx.lineTo(b.x+b.width/2,b.y+b.height/3);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(b.x+b.width*0.25,b.y+b.height/3);ctx.lineTo(b.x+b.width*0.25,b.y+b.height*2/3);ctx.stroke();
+    }else if(b.type==='steel'){
+      // 钢铁铆钉
+      ctx.fillStyle='rgba(200,210,230,0.2)';
+      var rivets=[[0.15,0.15],[0.85,0.15],[0.15,0.85],[0.85,0.85]];
+      for(var ri2=0;ri2<rivets.length;ri2++){ctx.beginPath();ctx.arc(b.x+b.width*rivets[ri2][0],b.y+b.height*rivets[ri2][1],S.s(2),0,Math.PI*2);ctx.fill();}
+    }else if(b.type==='ice'){
+      // 冰晶闪光
+      ctx.fillStyle='rgba(255,255,255,0.15)';
+      ctx.fillRect(b.x+b.width*0.1,b.y+b.height*0.2,b.width*0.3,S.s(2));
+      ctx.fillRect(b.x+b.width*0.5,b.y+b.height*0.6,b.width*0.25,S.s(1.5));
+    }
+
+    // 边框 - V3.1.3: 更鲜明
     ctx.strokeStyle=bc.stroke;ctx.lineWidth=S.s(1.5);ctx.strokeRect(b.x,b.y,b.width,b.height);
 
     // 高光
-    ctx.fillStyle='rgba(255,255,255,0.12)';ctx.fillRect(b.x+2,b.y+2,b.width-4,S.s(3));
+    ctx.fillStyle='rgba(255,255,255,0.1)';ctx.fillRect(b.x+2,b.y+2,b.width-4,S.s(3));
 
-    // 类型标记 - 建筑=材质名，TNT=特殊标记
+    // 类型标记
     ctx.font='bold '+S.s(12)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillStyle='rgba(255,255,255,0.65)';
     var label=b.type==='wood'?'木':b.type==='brick'?'砖':b.type==='steel'?'钢':b.type==='ice'?'冰':b.type==='rubber'?'胶':b.type==='tnt'?'💣':'?';
@@ -1363,55 +1507,61 @@ function drawBuildings(){
 
     // 低血量发光
     if(hp<0.3){
-      ctx.save();ctx.shadowColor=bc.glow;ctx.shadowBlur=8;
-      ctx.strokeStyle=bc.glow;ctx.lineWidth=S.s(1);ctx.strokeRect(b.x,b.y,b.width,b.height);
+      ctx.save();ctx.shadowColor=bc.glow;ctx.shadowBlur=10;
+      ctx.strokeStyle=bc.glow;ctx.lineWidth=S.s(1.5);ctx.strokeRect(b.x,b.y,b.width,b.height);
       ctx.restore();
     }
 
-    // 裂纹
+    // 裂纹 - V3.1.3: 更明显
     if(hp<0.7){
-      ctx.strokeStyle='rgba(0,0,0,0.4)';ctx.lineWidth=S.s(1);
-      var cn=hp<0.3?2:1;
-      for(var ci=0;ci<cn;ci++){ctx.beginPath();ctx.moveTo(b.x+b.width*(0.3+ci*0.2),b.y);ctx.lineTo(b.x+b.width*(0.4+ci*0.15),b.y+b.height*0.5);ctx.lineTo(b.x+b.width*(0.2+ci*0.3),b.y+b.height);ctx.stroke();}
+      ctx.strokeStyle='rgba(0,0,0,0.5)';ctx.lineWidth=S.s(1.2);
+      var cn=hp<0.3?3:1;
+      for(var ci=0;ci<cn;ci++){ctx.beginPath();ctx.moveTo(b.x+b.width*(0.2+ci*0.25),b.y);ctx.lineTo(b.x+b.width*(0.35+ci*0.15),b.y+b.height*0.5);ctx.lineTo(b.x+b.width*(0.15+ci*0.3),b.y+b.height);ctx.stroke();}
     }
 
     // 濒危闪烁
-    if(hp<0.3&&frame%6<3){ctx.fillStyle='rgba(255,50,50,0.12)';ctx.fillRect(b.x,b.y,b.width,b.height);}
+    if(hp<0.3&&frame%6<3){ctx.fillStyle='rgba(255,50,50,0.15)';ctx.fillRect(b.x,b.y,b.width,b.height);}
 
-    // 血条
+    // 血条 - V3.1.3: 发光血条
     if(hp<1){
-      var bw2=b.width*.8,bh2=S.s(3),bx2=b.x+(b.width-bw2)/2,by2=b.y-S.s(6);
-      ctx.fillStyle='rgba(0,0,0,0.4)';ctx.fillRect(bx2,by2,bw2,bh2);
-      ctx.fillStyle=hp>.5?C.neonGreen:hp>.25?C.neonYellow:C.neonRed;
-      ctx.fillRect(bx2,by2,bw2*hp,bh2);
+      var bw2=b.width*.85,bh2=S.s(4),bx2=b.x+(b.width-bw2)/2,by2=b.y-S.s(7);
+      ctx.fillStyle='rgba(0,0,0,0.5)';rr(ctx,bx2,by2,bw2,bh2,S.s(2));ctx.fill();
+      var hpColor=hp>.5?C.neonGreen:hp>.25?C.neonYellow:C.neonRed;
+      ctx.fillStyle=hpColor;
+      rr(ctx,bx2,by2,Math.max(S.s(2),bw2*hp),bh2,S.s(2));ctx.fill();
+      // V3.1.3: 血条发光
+      ctx.save();ctx.shadowColor=hpColor;ctx.shadowBlur=4;
+      rr(ctx,bx2,by2,Math.max(S.s(2),bw2*hp),bh2,S.s(2));ctx.fill();
+      ctx.restore();
     }
   });
 }
 
-// ===== 拆迁工具绘制 =====
+// ===== 拆迁工具绘制（V3.1.3: 增强视觉）=====
 function drawTools(){
-  // 工具区域标签
-  var groundY=canvas.height-S.s(50);
-  ctx.fillStyle=C.neonGreen;ctx.font='bold '+S.s(10)+'px Arial';ctx.textAlign='left';ctx.textBaseline='bottom';
-  ctx.fillText('🔧 拆迁工具（抓取砸向建筑）',S.sx(10),groundY-S.s(55));
-
-  // 绘制每个工具
+  // V3.1.3: 工具区域提示
   tools.forEach(function(t){
     if(!t.isActive) return;
-    // 工具背景（明亮突出）
     ctx.save();
-    // 可抓取脉冲高亮（V3.0.8新增）
-    if(!t.isGrabbed&&!crane.isGrabbing()){
-      var pa=0.25+Math.sin(gs.pulseTime*3)*0.2;
+    // V3.1.3: 未投掷时的提示标记
+    if(!t._thrown&&!t.isGrabbed){
+      // 可抓取脉冲高亮 - 更醒目
+      var pa=0.35+Math.sin(gs.pulseTime*3)*0.25;
       ctx.strokeStyle=hex2rgba(C.neonGreen,pa);ctx.lineWidth=S.s(3);
-      rr(ctx,t.x-S.s(3),t.y-S.s(3),t.width+S.s(6),t.height+S.s(6),S.s(9));ctx.stroke();
+      rr(ctx,t.x-S.s(4),t.y-S.s(4),t.width+S.s(8),t.height+S.s(8),S.s(10));ctx.stroke();
+      // V3.1.3: 提示文字
+      ctx.fillStyle=hex2rgba(C.neonGreen,pa);ctx.font='bold '+S.s(8)+'px Arial';ctx.textAlign='center';
+      ctx.fillText('▼ 点击抓取',t.x+t.width/2,t.y-S.s(10));
     }
-    // 工具底色 - 用比建筑更亮的颜色
+    // 工具底色 - 更亮的圆角
     ctx.fillStyle=hex2rgba(t.fill,0.9);
     rr(ctx,t.x,t.y,t.width,t.height,S.s(6));ctx.fill();
-    // 工具边框 - 绿色（拆迁工具色）
+    // 工具边框 - 绿色
     ctx.strokeStyle=C.neonGreen;ctx.lineWidth=S.s(2);
     rr(ctx,t.x,t.y,t.width,t.height,S.s(6));ctx.stroke();
+    // V3.1.3: 内发光
+    var tG=grad(ctx,t.x,t.y,t.x,t.y+t.height);
+    if(tG){tG.addColorStop(0,'rgba(255,255,255,0.15)');tG.addColorStop(0.4,'rgba(255,255,255,0)');ctx.fillStyle=tG;rr(ctx,t.x,t.y,t.width,t.height,S.s(6));ctx.fill();}
     // 工具emoji
     ctx.font=S.s(20)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillText(t.emoji,t.x+t.width/2,t.y+t.height/2-S.s(3));
@@ -1420,13 +1570,8 @@ function drawTools(){
     ctx.fillText(t.name,t.x+t.width/2,t.y+t.height-S.s(8));
     // 硬度/属性
     ctx.fillStyle=C.neonYellow;ctx.font=S.s(8)+'px Arial';
-    ctx.fillText(t.desc,t.x+t.width/2,t.y-S.s(5));
+    ctx.fillText(t.desc,t.x+t.width/2,t.y-S.s(16));
     ctx.restore();
-
-    // 如果被抓住，画电弧
-    if(t.isGrabbed && crane.magnet.isGrabbing && crane.magnet.grabbedBlock === t){
-      // 已经在drawMag中处理
-    }
   });
 }
 
@@ -1513,7 +1658,14 @@ function drawMag(mx,my){
 function drawParticles(){
   for(var i=0;i<particles.length;i++){
     var p=particles[i],a=p.life/p.ml;
-    if(p.t==='debris'){
+    if(p.t==='fire'){
+      // V3.1.3: 火焰粒子 - 发光方块
+      ctx.save();ctx.globalAlpha=a;
+      ctx.shadowColor=p.color;ctx.shadowBlur=6;
+      ctx.fillStyle=hex2rgba(p.color,a);
+      ctx.fillRect(p.x-p.sz*a/2,p.y-p.sz*a/2,p.sz*a,p.sz*a);
+      ctx.restore();
+    }else if(p.t==='debris'){
       ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.rot||0);
       ctx.fillStyle=hex2rgba(p.color,a);ctx.fillRect(-p.sz/2,-p.sz/2,p.sz,p.sz);
       ctx.restore();
@@ -1526,8 +1678,15 @@ function drawParticles(){
 
 function drawFloats(){
   for(var i=0;i<floats.length;i++){
-    var f=floats[i],a=f.life/45;
-    ctx.save();ctx.globalAlpha=a;ctx.fillStyle=f.c;ctx.font='bold '+S.s(22)+'px Arial';
+    var f=floats[i],a=f.life/(f.big?75:45);
+    ctx.save();ctx.globalAlpha=Math.min(1,a*1.2);
+    if(f.big){
+      // V3.1.3: 大号发光文字
+      ctx.shadowColor=f.c;ctx.shadowBlur=12;
+      ctx.fillStyle=f.c;ctx.font='bold '+S.s(28)+'px Arial';
+    }else{
+      ctx.fillStyle=f.c;ctx.font='bold '+S.s(22)+'px Arial';
+    }
     ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillText(f.t,f.x,f.y);
     ctx.restore();
@@ -1864,21 +2023,30 @@ function renderLB(){
     var hasLocalData = gs.friendScores && gs.friendScores.length > 0 && gs.friendScores[0].score > 0;
 
     if(hasLocalData){
-      // 表头 — 按关卡分数排列，不重复人名
+      // 表头 — V3.1.3: 排名/名称/关卡/得分
       ctx.fillStyle=C.textDim;ctx.font='bold '+S.s(11)+'px Arial';ctx.textAlign='left';
-      ctx.fillText('排名',S.sx(22),listY);
+      ctx.fillText('排名',S.sx(18),listY);
+      ctx.fillText('名称',S.sx(55),listY);
       ctx.textAlign='center';
-      ctx.fillText('关卡',canvas.width/2,listY);
+      ctx.fillText('关卡',canvas.width-S.sx(85),listY);
       ctx.textAlign='right';
-      ctx.fillText('得分',canvas.width-S.sx(22),listY);
+      ctx.fillText('得分',canvas.width-S.sx(12),listY);
 
       var medals = ['🥇','🥈','🥉'];
-      // V3.1.2: 按分数降序排列，去重（同一关卡只保留最高分）
+      // V3.1.3: 按人名+关卡去重，保留最高分
       var uniqueScores=[];
-      var seenLv={};
+      var seenKey={};
       for(var fi=0;fi<gs.friendScores.length;fi++){
-        var flv=gs.friendScores[fi].level;
-        if(!seenLv[flv]){seenLv[flv]=true;uniqueScores.push(gs.friendScores[fi]);}
+        var key=(gs.friendScores[fi].name||'')+'_'+gs.friendScores[fi].level;
+        if(!seenKey[key]){
+          seenKey[key]=uniqueScores.length;
+          uniqueScores.push(gs.friendScores[fi]);
+        }else{
+          // 已有此人此关卡记录，保留高分
+          if(gs.friendScores[fi].score>uniqueScores[seenKey[key]].score){
+            uniqueScores[seenKey[key]]=gs.friendScores[fi];
+          }
+        }
       }
       uniqueScores.sort(function(a,b){return b.score-a.score;});
 
@@ -1892,15 +2060,21 @@ function renderLB(){
         // 排名
         ctx.fillStyle=i<3?['#FFD700','#C0C0C0','#CD7F32'][i]:C.textDim;
         ctx.font='bold '+S.s(14)+'px Arial';ctx.textAlign='left';ctx.textBaseline='middle';
-        ctx.fillText(i<3?medals[i]:(i+1)+'.',S.sx(22),iy+itemH/2-S.s(2));
+        ctx.fillText(i<3?medals[i]:(i+1)+'.',S.sx(18),iy+itemH/2-S.s(2));
+
+        // V3.1.3: 名称
+        ctx.fillStyle=d.isMe?C.neonGreen:C.textMain;ctx.font=S.s(13)+'px Arial';ctx.textAlign='left';
+        var dispName=(d.name||'?');
+        if(dispName.length>5)dispName=dispName.substring(0,5)+'..';
+        ctx.fillText(dispName,S.sx(55),iy+itemH/2-S.s(2));
 
         // 关卡
         ctx.fillStyle=C.textMain;ctx.font=S.s(14)+'px Arial';ctx.textAlign='center';
-        ctx.fillText('L'+(d.level||'?'),canvas.width/2,iy+itemH/2-S.s(2));
+        ctx.fillText('L'+(d.level||'?'),canvas.width-S.sx(85),iy+itemH/2-S.s(2));
 
         // 分数
         ctx.fillStyle=C.neonGreen;ctx.textAlign='right';ctx.font='bold '+S.s(14)+'px Arial';
-        ctx.fillText((d.score||0)+'分',canvas.width-S.sx(22),iy+itemH/2-S.s(2));
+        ctx.fillText((d.score||0)+'分',canvas.width-S.sx(12),iy+itemH/2-S.s(2));
       }
     }
 
@@ -1923,16 +2097,18 @@ function renderLB(){
       ctx.fillText('邀请好友一起玩，排名更精彩！',canvas.width/2,listY+S.s(95));
     }
   }else{
-    // 我的排行 - 显示真实历史数据
+    // 我的排行 - V3.1.3: 显示真实历史数据（含人名）
     if(!gs.worldScores||!gs.worldScores.length)loadWorldScores();
     if(gs.worldScores.length>0){
       // 表头
       ctx.fillStyle=C.textDim;ctx.font='bold '+S.s(11)+'px Arial';ctx.textAlign='left';
-      ctx.fillText('关卡',S.sx(25),listY);
+      ctx.fillText('排名',S.sx(18),listY);
+      ctx.fillText('名称',S.sx(55),listY);
       ctx.textAlign='center';
-      ctx.fillText('星级',canvas.width/2,listY);
+      ctx.fillText('关卡',canvas.width-S.sx(100),listY);
+      ctx.fillText('星级',canvas.width-S.sx(55),listY);
       ctx.textAlign='right';
-      ctx.fillText('得分',canvas.width-S.sx(25),listY);
+      ctx.fillText('得分',canvas.width-S.sx(12),listY);
 
       for(var i=0;i<Math.min(gs.worldScores.length,15);i++){
         var iy=listY+S.s(16)+i*itemH;
@@ -1943,22 +2119,27 @@ function renderLB(){
 
         // 排名
         ctx.fillStyle=C.textDim;ctx.font='bold '+S.s(13)+'px Arial';ctx.textAlign='left';ctx.textBaseline='middle';
-        ctx.fillText((i+1)+'.',S.sx(22),iy+itemH/2-S.s(2));
+        ctx.fillText((i+1)+'.',S.sx(18),iy+itemH/2-S.s(2));
+
+        // V3.1.3: 名称
+        ctx.fillStyle=C.neonGreen;ctx.font=S.s(13)+'px Arial';ctx.textAlign='left';
+        var wName=(d.name||'我');
+        if(wName.length>5)wName=wName.substring(0,5)+'..';
+        ctx.fillText(wName,S.sx(55),iy+itemH/2-S.s(2));
 
         // 关卡
-        ctx.fillStyle=C.textMain;ctx.font=S.s(14)+'px Arial';ctx.textAlign='left';
-        ctx.fillText('L'+(d.level||'?'),S.sx(55),iy+itemH/2-S.s(2));
+        ctx.fillStyle=C.textMain;ctx.font=S.s(14)+'px Arial';ctx.textAlign='center';
+        ctx.fillText('L'+(d.level||'?'),canvas.width-S.sx(100),iy+itemH/2-S.s(2));
 
         // 星级
-        ctx.textAlign='center';
         var starStr='';
         for(var si=0;si<(d.stars||0);si++)starStr+='★';
         ctx.fillStyle=C.neonYellow;ctx.font=S.s(12)+'px Arial';
-        ctx.fillText(starStr||'—',canvas.width/2,iy+itemH/2-S.s(2));
+        ctx.fillText(starStr||'—',canvas.width-S.sx(55),iy+itemH/2-S.s(2));
 
         // 分数
         ctx.fillStyle=C.neonGreen;ctx.textAlign='right';ctx.font='bold '+S.s(14)+'px Arial';
-        ctx.fillText((d.score||0)+'分',canvas.width-S.sx(22),iy+itemH/2-S.s(2));
+        ctx.fillText((d.score||0)+'分',canvas.width-S.sx(12),iy+itemH/2-S.s(2));
       }
     }else{
       ctx.fillStyle=C.textDim;ctx.font=S.s(14)+'px Arial';ctx.textAlign='center';
