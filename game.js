@@ -17,7 +17,7 @@ var BuildingGenerator = require('./js/BuildingGenerator');
 var AudioManager = require('./js/AudioManager').AudioManager;
 var SoundNames = require('./js/AudioManager').SoundNames;
 
-var VERSION = '3.0.4';
+var VERSION = '3.0.5';
 
 // ===== 配色（统一管理）=====
 var C = {
@@ -188,7 +188,7 @@ function getMechanicForLevel(lv) {
 }
 
 var canvas, ctx, physics, crane, bg, audio;
-var buildings = [], particles = [], floats = [];
+var buildings = [], tools = [], particles = [], floats = [];
 var gameTimer = null, running = false, frame = 0, lastT = 0;
 var uiButtons = [];
 var touch = { sx:0, sy:0, lx:0, ly:0, drag:false, dist:0, st:0, moved:false };
@@ -432,7 +432,7 @@ var NPC = {
     win:['通关啦！厉害！','你真棒！'],
     lose:['没关系再来~','下次一定行！'],
     idle:['试试抓一个方块~','点击建筑试试！'],
-    step1:['第一步：点击方块抓取'],
+    step1:['第一步：点击拆迁工具抓取'],
     step2:['第二步：滑动甩动方块'],
     step3:['第三步：点击释放砸建筑！'],
     daily:['每日奖励已领取！','连续登录加成！']
@@ -541,95 +541,131 @@ function gameLoop() {
 // ===== 每帧更新 =====
 function update() {
   crane.update();
-  bg.update(physics);
-  checkFlyingHits();
+  // 工具物理更新
+  for(var i=0;i<tools.length;i++){
+    var t=tools[i];
+    if(t.isGrabbed||!t.isActive) continue;
+    t.velocityY += 0.5; // 重力
+    t.x += t.velocityX;
+    t.y += t.velocityY;
+    // 地面碰撞
+    var gy=canvas.height-S.s(50);
+    if(t.y+t.height>gy){t.y=gy-t.height;t.velocityY*=-0.3;t.velocityX*=0.8;if(Math.abs(t.velocityY)<0.5)t.velocityY=0;}
+    // 左右墙
+    if(t.x<0){t.x=0;t.velocityX*=-0.5;}
+    if(t.x+t.width>canvas.width){t.x=canvas.width-t.width;t.velocityX*=-0.5;}
+    // 速度衰减
+    t.velocityX*=0.995;
+  }
+  // 建筑悬空检测（不自动破坏）
   checkFloatingBlocks();
+  // 核心：工具撞击建筑检测
+  checkToolHits();
   checkGameEnd();
 }
 
-// ===== 飞行撞击检测 =====
-function checkFlyingHits() {
-  for(var i=0;i<buildings.length;i++){
-    var b=buildings[i];
-    if(b.isDestroyed||b.isGrabbed) continue;
-    var spd=Math.sqrt(b.velocityX*b.velocityX+b.velocityY*b.velocityY);
-    if(spd<2) continue;
-    for(var j=0;j<buildings.length;j++){
-      if(i===j) continue;
-      var t=buildings[j];
-      if(t.isDestroyed||t.isGrabbed) continue;
-      var tSpd=Math.sqrt(t.velocityX*t.velocityX+t.velocityY*t.velocityY);
-      if(tSpd>2) continue;
-      if(b.x<t.x+t.width && b.x+b.width>t.x && b.y<t.y+t.height && b.y+b.height>t.y){
-        var impactForce = spd * b.mass * 8;
-        var dmg = impactForce / t.mass * 0.5;
-        t.health -= dmg;
-        var cx=t.x+t.width/2, cy=t.y+t.height/2;
-        gs.shake=Math.min(20,impactForce*0.25);
+// ===== 工具撞击建筑（核心得分逻辑）=====
+function checkToolHits() {
+  for(var ti=0;ti<tools.length;ti++){
+    var tool=tools[ti];
+    if(!tool.isActive||tool.isGrabbed) continue;
+    var spd=Math.sqrt(tool.velocityX*tool.velocityX+tool.velocityY*tool.velocityY);
+    if(spd<3) continue; // 速度不够不算撞击
+
+    for(var bi=0;bi<buildings.length;bi++){
+      var bld=buildings[bi];
+      if(bld.isDestroyed) continue;
+
+      // AABB碰撞
+      if(tool.x<bld.x+bld.width && tool.x+tool.width>bld.x && tool.y<bld.y+bld.height && tool.y+tool.height>bld.y){
+        // 计算碰撞角度系数 (正面撞击=1, 侧面撞击=0.5~0.8)
+        var dx=(bld.x+bld.width/2)-(tool.x+tool.width/2);
+        var dy=(bld.y+bld.height/2)-(tool.y+tool.height/2);
+        var dist=Math.sqrt(dx*dx+dy*dy);
+        var angleFactor = dist>0 ? Math.max(0.4, Math.abs(dy)/(dist+1)) : 1; // 垂直打击更有效
+
+        // 伤害 = 工具硬度 × 碰撞力度 × 角度系数
+        var impactForce = spd * tool.hardness;
+        var dmg = impactForce * angleFactor / (bld.mass || 1);
+        bld.health -= dmg;
+
+        var cx=bld.x+bld.width/2, cy=bld.y+bld.height/2;
+        gs.shake=Math.min(8,impactForce*0.08);
         audio.playSound(SoundNames.CRASH);
-        spawnSparks(cx,cy,t.color||C.neonOrange,6);
-        if(t.health<=0){
-          t.health=0; t.isDestroyed=true;
-          var pts=t.score||10;
+        spawnSparks(cx,cy,bld.color||C.neonOrange,4);
+
+        // 显示伤害数值
+        var dmgShow=Math.floor(dmg);
+        addFloat(cx,cy-S.s(10),'-'+dmgShow,C.neonOrange);
+
+        if(bld.health<=0){
+          bld.health=0; bld.isDestroyed=true;
+          // 得分 = 基础分 × 硬度系数 × 角度系数
+          var pts=Math.floor((bld.score||10) * tool.hardness * angleFactor);
           gs.combo++; gs.comboTimer=90;
           if(gs.combo>1) pts=Math.floor(pts*(1+gs.combo*0.15));
           gs.score+=pts;
           gs.totalDestroys++;
           if(gs.combo>gs.maxCombo) gs.maxCombo=gs.combo;
           gs.totalScore+=pts;
-          gs.flash=0.15;
+          gs.flash=0.1;
 
-          // 慢动作（高连击时触发）
           if(gs.combo>=5) gs.slowMo=6;
 
-          spawnDebris(cx,cy,t.color||C.neonOrange,8);
-          spawnSparks(cx,cy,C.neonYellow,6);
+          spawnDebris(cx,cy,bld.color||C.neonOrange,6);
+          spawnSparks(cx,cy,C.neonYellow,4);
           addFloat(cx,cy,'+'+pts,gs.combo>1?C.neonYellow:C.neonGreen);
-
-          // 连击特效
           if(gs.combo>=3){
             addFloat(cx,cy-S.s(25),gs.combo+'x COMBO!',C.neonPurple);
-            gs.shake=Math.min(12,gs.combo*2);
+            gs.shake=Math.min(10,gs.combo*2);
           }
 
           audio.playSound(SoundNames.DESTROY);
           NPC.show(NPC.say(gs.combo>2?'combo':'hit'),60);
 
-          if(t.explosive){
-            gs.shake=12;gs.flash=0.3;
-            spawnDebris(cx,cy,C.neonRed,12);spawnSparks(cx,cy,C.neonYellow,10);
-            for(var k=0;k<buildings.length;k++){var bk=buildings[k];if(bk.isDestroyed||bk===t)continue;
+          // 建筑爆炸（TNT方块）
+          if(bld.explosive){
+            gs.shake=12;gs.flash=0.2;
+            spawnDebris(cx,cy,C.neonRed,8);spawnSparks(cx,cy,C.neonYellow,6);
+            for(var k=0;k<buildings.length;k++){var bk=buildings[k];if(bk.isDestroyed||bk===bld)continue;
               var dx2=(bk.x+bk.width/2)-cx,dy2=(bk.y+bk.height/2)-cy;
-              if(Math.sqrt(dx2*dx2+dy2*dy2)<120){bk.health-=40;if(bk.health<=0){bk.health=0;bk.isDestroyed=true;gs.score+=bk.score||10;spawnDebris(bk.x+bk.width/2,bk.y+bk.height/2,bk.color||C.neonRed,4);}}
+              if(Math.sqrt(dx2*dx2+dy2*dy2)<120){bk.health-=40;if(bk.health<=0){bk.health=0;bk.isDestroyed=true;gs.score+=bk.score||10;spawnDebris(bk.x+bk.width/2,bk.y+bk.height/2,bk.color||C.neonRed,3);}}
             }
           }
-          addCollapse(t);
+          addCollapse(bld);
         }
-        b.velocityX *= -0.3;
-        b.velocityY *= -0.3;
+
+        // 工具反弹
+        tool.velocityX *= -0.4;
+        tool.velocityY *= -0.4;
         break;
       }
     }
   }
 }
 
-// ===== 悬空检测 =====
+// ===== 悬空检测（仅让悬空方块缓慢下落，不触发伤害）=====
 function checkFloatingBlocks() {
   var groundY = canvas.height - S.s(50);
   for(var i=0;i<buildings.length;i++){
     var b=buildings[i];
-    if(b.isDestroyed||b.isGrabbed) continue;
-    if(b.velocityY>1) continue;
+    if(b.isDestroyed) continue;
+    // 被工具带走的建筑方块不做悬空检测
     var supported = (b.y + b.height >= groundY - 2);
     if(!supported){
       for(var j=0;j<buildings.length;j++){
-        if(i===j||buildings[j].isDestroyed||buildings[j].isGrabbed) continue;
+        if(i===j||buildings[j].isDestroyed) continue;
         if(b.x+b.width>buildings[j].x+2 && b.x<buildings[j].x+buildings[j].width-2){
           if(Math.abs((b.y+b.height)-buildings[j].y)<3){supported=true;break;}
         }
       }
     }
-    if(!supported) b.velocityY = 1;
+    if(!supported) b.velocityY = Math.min((b.velocityY||0)+0.3, 3);
+    else b.velocityY = 0;
+    if(b.velocityY>0){
+      b.y += b.velocityY;
+      if(b.y+b.height>=groundY){b.y=groundY-b.height;b.velocityY=0;}
+    }
   }
 }
 
@@ -677,6 +713,7 @@ function handleGame(x,y,isTap){
   if(gs.gamePaused) return;
   if(isTap){
     if(crane.isGrabbing()){
+      // === 释放工具 ===
       var block=crane.releaseMagnet();
       if(block){
         var throwX=crane.pendulum.angularVelocity*100;
@@ -689,13 +726,15 @@ function handleGame(x,y,isTap){
         NPC.show(NPC.say('swing'),60);
       }
     } else {
+      // === 抓取：只抓拆迁工具，不抓建筑 ===
       var best=null, bestD=crane.magnet.attractRadius*1.5;
-      for(var i=0;i<buildings.length;i++){
-        var b=buildings[i];
-        if(b.isDestroyed||b.isGrabbed) continue;
-        var bx=b.x+b.width/2,by=b.y+b.height/2;
-        var d=Math.sqrt((x-bx)*(x-bx)+(y-by)*(y-by));
-        if(d<bestD){bestD=d;best=b;}
+      // 优先从工具中找
+      for(var i=0;i<tools.length;i++){
+        var t=tools[i];
+        if(!t.isActive) continue;
+        var tx=t.x+t.width/2,ty=t.y+t.height/2;
+        var d=Math.sqrt((x-tx)*(x-tx)+(y-ty)*(y-ty));
+        if(d<bestD){bestD=d;best=t;}
       }
       if(best){
         crane.magnet.isActive=true;crane.magnet.isGrabbing=true;crane.magnet.grabbedBlock=best;
@@ -709,29 +748,83 @@ function handleGame(x,y,isTap){
         spawnSparks(crane.magnet.x,crane.magnet.y,C.neonPurple,5);
         NPC.show(NPC.say('grab'),60);
       } else {
-        NPC.show('点击方块抓取，甩出去砸建筑！',100);
+        NPC.show('点击拆迁工具抓取！',100);
       }
     }
   }
 }
 
 // ===== 关卡加载 =====
+// ===== 拆迁工具定义 =====
+var TOOL_TYPES = {
+  steelBall: { name: '钢球', hardness: 3.0, mass: 4.0, fill: '#8899AA', stroke: '#556677', glow: '#AACCDD', emoji: '⚫', desc: '硬·重' },
+  ironHammer: { name: '铁锤', hardness: 2.5, mass: 3.0, fill: '#7788AA', stroke: '#445566', glow: '#99BBDD', emoji: '🔨', desc: '硬·中' },
+  wreckBall: { name: ' wrecking球', hardness: 2.0, mass: 3.5, fill: '#555566', stroke: '#333344', glow: '#888899', emoji: '⚽', desc: '中·重' },
+  rubberBall: { name: '橡皮球', hardness: 0.8, mass: 1.0, fill: '#E840A0', stroke: '#A82070', glow: '#FF70C0', emoji: '🏀', desc: '弹·轻' },
+  bomb: { name: '炸弹', hardness: 1.5, mass: 2.0, fill: '#FF5020', stroke: '#CC3000', glow: '#FF8040', emoji: '💣', desc: '爆·中' }
+};
+
+function generateTools(lv) {
+  tools = [];
+  var groundY = canvas.height - S.s(50);
+  var tw = S.s(40), th = S.s(40);
+
+  // 根据关卡解锁不同工具
+  var available = ['steelBall']; // 默认只有钢球
+  if (lv >= 5) available.push('ironHammer');
+  if (lv >= 15) available.push('wreckBall');
+  if (lv >= 25) available.push('rubberBall');
+  if (lv >= 35) available.push('bomb');
+
+  // 每关3个工具，水平排列在左侧
+  var toolCount = Math.min(3, available.length);
+  var startX = S.sx(15);
+  var startY = groundY - th - S.s(5);
+
+  for (var i = 0; i < toolCount; i++) {
+    var typeId = available[i % available.length];
+    var td = TOOL_TYPES[typeId];
+    tools.push({
+      type: typeId,
+      name: td.name,
+      hardness: td.hardness,
+      mass: td.mass,
+      fill: td.fill,
+      stroke: td.stroke,
+      glow: td.glow,
+      emoji: td.emoji,
+      desc: td.desc,
+      x: startX + i * (tw + S.s(10)),
+      y: startY,
+      width: tw,
+      height: th,
+      velocityX: 0,
+      velocityY: 0,
+      isGrabbed: false,
+      isActive: true,
+      // 工具使用后会在地面重生
+      respawnX: startX + i * (tw + S.s(10)),
+      respawnY: startY
+    });
+  }
+}
+
 function loadLevel(lv){
   if(lv<1)lv=1;if(lv>1000)lv=1000;
   if(!progress.isUnlocked(lv)){NPC.show('关卡未解锁！',90);return;}
   clearTimer();
+  // 生成建筑
   buildings=bg.generateLevel(lv);
-  // 方块尺寸由BuildingGenerator控制，不再强制放大
-  // 确保方块有合理的最小尺寸
-  buildings.forEach(function(b){
-    if(b.width<20)b.width=20;
-    if(b.height<20)b.height=20;
-  });
+  buildings.forEach(function(b){if(b.width<20)b.width=20;if(b.height<20)b.height=20;});
+
+  // 生成拆迁工具
+  tools=[];
+  generateTools(lv);
+
   gs.currentLevel=lv;
   gs.targetScore=bg.getTargetScore(lv);gs.timeLeft=bg.getTimeLimit(lv);
   gs.score=0;gs.gameActive=true;gs.gamePaused=false;gs.currentScene='game';
   gs.combo=0;gs.comboTimer=0;gs.slowMo=0;
-  // 清空粒子（复用对象池）
   particles.length=0;floats.length=0;
   crane.crane.x=canvas.width/2;crane.pendulum.ropeLength=Math.floor(S.h*0.25);
   crane.magnet.x=crane.crane.x;crane.magnet.y=crane.crane.y+crane.crane.height+crane.pendulum.ropeLength;
@@ -978,6 +1071,7 @@ function renderGame(){
   ctx.strokeStyle=C.groundLine;ctx.lineWidth=S.s(1);ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(canvas.width,gy);ctx.stroke();
 
   drawBuildings();
+  drawTools();
   drawCrane();
   drawParticles();drawFloats();
 
@@ -1074,6 +1168,63 @@ function drawBuildings(){
       ctx.fillStyle='rgba(0,0,0,0.4)';ctx.fillRect(bx2,by2,bw2,bh2);
       ctx.fillStyle=hp>.5?C.neonGreen:hp>.25?C.neonYellow:C.neonRed;
       ctx.fillRect(bx2,by2,bw2*hp,bh2);
+    }
+  });
+}
+
+// ===== 拆迁工具绘制 =====
+function drawTools(){
+  // 工具区域标签
+  var groundY=canvas.height-S.s(50);
+  ctx.fillStyle=C.neonGreen;ctx.font='bold '+S.s(10)+'px Arial';ctx.textAlign='left';ctx.textBaseline='bottom';
+  ctx.fillText('🔧 拆迁工具（抓取砸向建筑）',S.sx(10),groundY-S.s(55));
+
+  // 绘制每个工具
+  tools.forEach(function(t){
+    if(!t.isActive) return;
+    // 工具背景（明亮突出）
+    ctx.save();
+    // 工具底色 - 用比建筑更亮的颜色
+    ctx.fillStyle=hex2rgba(t.fill,0.9);
+    rr(ctx,t.x,t.y,t.width,t.height,S.s(6));ctx.fill();
+    // 工具边框 - 绿色（拆迁工具色）
+    ctx.strokeStyle=C.neonGreen;ctx.lineWidth=S.s(2);
+    rr(ctx,t.x,t.y,t.width,t.height,S.s(6));ctx.stroke();
+    // 工具emoji
+    ctx.font=S.s(20)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(t.emoji,t.x+t.width/2,t.y+t.height/2-S.s(3));
+    // 工具名
+    ctx.fillStyle='#fff';ctx.font='bold '+S.s(9)+'px Arial';
+    ctx.fillText(t.name,t.x+t.width/2,t.y+t.height-S.s(8));
+    // 硬度/属性
+    ctx.fillStyle=C.neonYellow;ctx.font=S.s(8)+'px Arial';
+    ctx.fillText(t.desc,t.x+t.width/2,t.y-S.s(5));
+    ctx.restore();
+
+    // 如果被抓住，画电弧
+    if(t.isGrabbed && crane.magnet.isGrabbing && crane.magnet.grabbedBlock === t){
+      // 已经在drawMag中处理
+    }
+  });
+
+  // 工具重生逻辑：被释放后落地的工具，静止后回到原位
+  tools.forEach(function(t){
+    if(t.isActive && !t.isGrabbed){
+      var spd=Math.abs(t.velocityX)+Math.abs(t.velocityY);
+      // 如果工具静止在地面，延迟2秒后重生
+      if(spd < 0.5 && t.y + t.height >= groundY - 3){
+        if(!t._stillTimer) t._stillTimer = 0;
+        t._stillTimer++;
+        if(t._stillTimer > 120){ // 2秒后重生
+          t.x = t.respawnX;
+          t.y = t.respawnY;
+          t.velocityX = 0;
+          t.velocityY = 0;
+          t._stillTimer = 0;
+        }
+      } else {
+        t._stillTimer = 0;
+      }
     }
   });
 }
@@ -1192,15 +1343,22 @@ function drawHUD(){
   ctx.fillStyle=C.neonCyan;ctx.font=S.s(11)+'px Arial';ctx.textAlign='center';ctx.fillText(gs.gamePaused?'继续':'暂停',px+pw/2,py+ph/2);
   regBtn(px,py,pw,ph,function(){gs.gamePaused=!gs.gamePaused;});
 
+  // 当前工具信息
+  if(crane.isGrabbing() && crane.magnet.grabbedBlock){
+    var curTool = crane.magnet.grabbedBlock;
+    ctx.fillStyle=C.neonGreen;ctx.font='bold '+S.s(12)+'px Arial';ctx.textAlign='center';
+    ctx.fillText('🧲 '+curTool.name+' | 硬度:'+curTool.hardness+' | '+curTool.desc,canvas.width/2,ty+th+S.s(14));
+  }
+
   // 连击显示
   if(gs.combo>=2){
     ctx.fillStyle=C.neonPurple;ctx.font='bold '+S.s(16)+'px Arial';ctx.textAlign='center';
-    ctx.fillText(gs.combo+'x COMBO',canvas.width/2,ty+th+S.s(18));
+    ctx.fillText(gs.combo+'x COMBO',canvas.width/2,ty+th+S.s(28));
   }
 
   if(gs.gameActive&&!gs.gamePaused){
     var el=bg.getTimeLimit(gs.currentLevel)-gs.timeLeft;
-    if(el<4){ctx.fillStyle=hex2rgba(C.neonCyan,Math.max(0,1-el/4));ctx.font=S.s(13)+'px Arial';ctx.textAlign='center';ctx.fillText('点击建筑抓取 → 滑动甩动 → 释放砸向建筑',canvas.width/2,canvas.height-S.s(18));}
+    if(el<4){ctx.fillStyle=hex2rgba(C.neonCyan,Math.max(0,1-el/4));ctx.font=S.s(13)+'px Arial';ctx.textAlign='center';ctx.fillText('点击工具抓取 → 滑动甩动 → 释放砸向建筑！',canvas.width/2,canvas.height-S.s(18));}
   }
 }
 
@@ -1495,7 +1653,7 @@ function renderHelp(){
   ctx.fillStyle=C.neonPurple;ctx.font='bold '+S.s(24)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
   ctx.fillText('玩法说明',canvas.width/2,S.safY(35));
 
-  var t=['▸ 点击方块 → 磁铁抓住','▸ 左右滑动 → 甩动蓄力','▸ 再次点击 → 释放砸建筑','▸ 砸中得分 → 连击加成！','▸ TNT方块 → 范围爆炸','▸ 摧毁支撑 → 建筑倒塌','▸ 达到目标 → 过关！','▸ 连续登录 → 每日奖励'];
+  var t=['▸ 点击拆迁工具 → 磁铁抓住','▸ 左右滑动 → 甩动蓄力','▸ 再次点击 → 释放砸向建筑','▸ 不同工具硬度不同，得分不同','▸ 正面撞击比侧面得分更高','▸ 连续破坏 → 连击加成！','▸ 建筑下方支撑被毁 → 倒塌','▸ 工具落地后自动回到原位'];
   ctx.fillStyle=C.textMain;ctx.font=S.s(13)+'px Arial';ctx.textAlign='left';
   for(var i=0;i<t.length;i++)ctx.fillText(t[i],S.sx(25),S.safY(70)+i*S.s(26));
 
