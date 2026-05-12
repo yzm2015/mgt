@@ -17,7 +17,7 @@ var BuildingGenerator = require('./js/BuildingGenerator');
 var AudioManager = require('./js/AudioManager').AudioManager;
 var SoundNames = require('./js/AudioManager').SoundNames;
 
-var VERSION = '3.1.1';
+var VERSION = '3.1.2';
 
 // ===== 配色（统一管理）=====
 var C = {
@@ -260,7 +260,7 @@ var GIFT_DEFS = [
 
 // 礼物掉落判定
 function tryDropGift(cx,cy){
-  var dropRate=0.22; // 22%概率掉礼物
+  var dropRate=0.45; // V3.1.2: 45%概率掉礼物（大幅提高可见性）
   if(Math.random()>dropRate) return;
   // 加权随机选择
   var totalW=0;for(var i=0;i<GIFT_DEFS.length;i++)totalW+=GIFT_DEFS[i].weight;
@@ -548,12 +548,10 @@ function loadFriendScores() {
 }
 
 function loadWorldScores() {
-  // 世界排行：使用微信云存储 wx.getCloudStorageSummary 不可用
-  // 改为只显示自己的历史最高分排行（真实数据）
+  // V3.1.2: 我的排行 - 按关卡显示，不重复人名
   gs.worldScores = [];
   try {
     var all = [];
-    // 从各关卡进度中提取分数
     var keys = Object.keys(progress.levels);
     for (var i = 0; i < keys.length; i++) {
       var lv = keys[i];
@@ -563,10 +561,8 @@ function loadWorldScores() {
       }
     }
     all.sort(function(a, b) { return b.score - a.score; });
-    var uname = (gs.userInfo && gs.userInfo.nickName) || '我';
     for (var j = 0; j < Math.min(all.length, 20); j++) {
       gs.worldScores.push({
-        name: uname,
         score: all[j].score,
         level: all[j].level,
         stars: all[j].stars
@@ -734,6 +730,11 @@ function update() {
           try{audio.playSound(SoundNames.CRASH);}catch(e){}
           spawnSparks(cx,cy,bld.color||C.neonOrange,4);
           addFloat(cx,cy-S.s(10),Math.floor(actualDmg)+'伤害',C.neonOrange);
+          // V3.1.2: 每次碰撞也有小概率掉祝福语（不用摧毁）
+          if(Math.random()<0.12){
+            var msgs=['加油!','漂亮!','继续!','好球!','Nice!'];
+            addFloat(cx,cy-S.s(25),msgs[Math.floor(Math.random()*msgs.length)],C.neonYellow);
+          }
           if(bld.health<=0){
             bld.health=0;bld.isDestroyed=true;
             var pts=Math.max(1,Math.floor((bld.score||10)*effectiveHardness*angleFactor));
@@ -988,44 +989,38 @@ function generateTools(lv) {
   var groundY = canvas.height - S.s(50);
   var tw = S.s(40), th = S.s(40);
 
-  // 根据关卡解锁不同工具
-  var available = ['steelBall']; // 默认只有钢球
-  if (lv >= 5) available.push('ironHammer');
-  if (lv >= 15) available.push('wreckBall');
-  if (lv >= 25) available.push('rubberBall');
-  if (lv >= 35) available.push('bomb');
+  // V3.1.2: 每关只给1个当前最强工具，避免画面混乱
+  var typeId = 'steelBall';
+  if (lv >= 35) typeId = 'bomb';
+  else if (lv >= 25) typeId = 'rubberBall';
+  else if (lv >= 15) typeId = 'wreckBall';
+  else if (lv >= 5) typeId = 'ironHammer';
 
-  // 每关3个工具，水平排列在左侧
-  var toolCount = Math.min(3, available.length);
+  var td = TOOL_TYPES[typeId];
   var startX = S.sx(15);
   var startY = groundY - th - S.s(5);
 
-  for (var i = 0; i < toolCount; i++) {
-    var typeId = available[i % available.length];
-    var td = TOOL_TYPES[typeId];
-    tools.push({
-      type: typeId,
-      name: td.name,
-      hardness: td.hardness,
-      mass: td.mass,
-      fill: td.fill,
-      stroke: td.stroke,
-      glow: td.glow,
-      emoji: td.emoji,
-      desc: td.desc,
-      x: startX + i * (tw + S.s(10)),
-      y: startY,
-      width: tw,
-      height: th,
-      velocityX: 0,
-      velocityY: 0,
-      isGrabbed: false,
-      isActive: true,
-      // 工具使用后会在地面重生
-      respawnX: startX + i * (tw + S.s(10)),
-      respawnY: startY
-    });
-  }
+  tools.push({
+    type: typeId,
+    name: td.name,
+    hardness: td.hardness,
+    mass: td.mass,
+    fill: td.fill,
+    stroke: td.stroke,
+    glow: td.glow,
+    emoji: td.emoji,
+    desc: td.desc,
+    x: startX,
+    y: startY,
+    width: tw,
+    height: th,
+    velocityX: 0,
+    velocityY: 0,
+    isGrabbed: false,
+    isActive: true,
+    respawnX: startX,
+    respawnY: startY
+  });
 }
 
 function loadLevel(lv){
@@ -1626,8 +1621,8 @@ function renderGameOver(){
   ctx.fillStyle='rgba(5,10,30,0.92)';ctx.fillRect(0,0,canvas.width,canvas.height);
   var win=gs.score>=gs.targetScore;
   var cx=canvas.width/2;
-  // 面板尺寸加大，避免内容溢出
-  var pw=S.s(310),ph=win?S.s(420):S.s(380);
+  // V3.1.2: 面板高度加大到500，确保所有按钮都在框内
+  var pw=S.s(310),ph=S.s(500);
   var px=(canvas.width-pw)/2,py=(canvas.height-ph)/2;
   ctx.fillStyle=C.panelBg;ctx.strokeStyle=C.panelBorder;ctx.lineWidth=S.s(1.5);
   rr(ctx,px,py,pw,ph,S.s(12));ctx.fill();rr(ctx,px,py,pw,ph,S.s(12));ctx.stroke();
@@ -1636,7 +1631,7 @@ function renderGameOver(){
   ctx.fillStyle=win?C.neonGreen:C.neonRed;ctx.font='bold '+S.s(28)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
   ctx.fillText(win?'关卡通过!':'时间到!',cx,py+S.s(40));
 
-  // 星级 - 居中排列
+  // 星级
   var starY=py+S.s(80);
   for(var si=0;si<3;si++){
     ctx.font=S.s(36)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
@@ -1644,7 +1639,7 @@ function renderGameOver(){
     ctx.fillText(si<gs.stars?'★':'☆',cx-S.s(36)+si*S.s(36),starY);
   }
 
-  // 得分信息区
+  // 得分信息
   var infoY=py+S.s(120);
   ctx.fillStyle=C.textMain;ctx.font='bold '+S.s(22)+'px Arial';ctx.textAlign='center';
   ctx.fillText('得分: '+gs.score,cx,infoY);
@@ -1658,49 +1653,40 @@ function renderGameOver(){
   ctx.fillStyle='rgba(0,0,0,0.4)';rr(ctx,barX,barY,barW,barH,S.s(5));ctx.fill();
   ctx.fillStyle=pct>=1?C.neonGreen:pct>=0.7?C.neonCyan:C.neonRed;
   rr(ctx,barX,barY,Math.min(barW,barW*pct),barH,S.s(5));ctx.fill();
-  ctx.fillStyle=C.textDim;ctx.font=S.s(9)+'px Arial';ctx.textAlign='right';
-  ctx.fillText(Math.floor(pct*100)+'%',barX+barW-S.s(3),barY+barH-S.s(0.5));
 
-  // 关卡信息
+  // 关卡+连击
   var mc=getMechanicForLevel(gs.currentLevel);
   ctx.fillStyle=mc.color;ctx.font=S.s(12)+'px Arial';ctx.textAlign='center';
   ctx.fillText('L'+gs.currentLevel+' ['+mc.name+'] '+mc.desc,cx,infoY+S.s(68));
-
-  // 连击统计
   if(gs.maxCombo>0){
-    ctx.fillStyle=C.neonPurple;ctx.font='bold '+S.s(14)+'px Arial';ctx.textAlign='center';
-    ctx.fillText('最高连击: '+gs.maxCombo+'x',cx,infoY+S.s(92));
+    ctx.fillStyle=C.neonPurple;ctx.font='bold '+S.s(14)+'px Arial';
+    ctx.fillText('最高连击: '+gs.maxCombo+'x',cx,infoY+S.s(90));
   }
 
-  // 按钮区
-  var btnY=py+ph-S.s(130);
-  var bw2=S.s(130),bh2=S.s(48);
+  // 按钮区 — 紧凑布局，3行按钮
+  var btnBaseY=py+ph-S.s(175);
+  var bw2=S.s(130),bh2=S.s(44);
 
-  // 重玩按钮
-  drawNeonBtn(cx-bw2-S.s(6),btnY,bw2,bh2,'重玩',C.neonOrange);
-  regBtn(cx-bw2-S.s(6),btnY,bw2,bh2,function(){loadLevel(gs.currentLevel);});
-
-  // 下一关按钮（通关才显示）
+  // 第1行：重玩 + 下一关/再试
+  drawNeonBtn(cx-bw2-S.s(6),btnBaseY,bw2,bh2,'重玩',C.neonOrange);
+  regBtn(cx-bw2-S.s(6),btnBaseY,bw2,bh2,function(){loadLevel(gs.currentLevel);});
   if(win&&gs.currentLevel<1000){
-    drawNeonBtn(cx+S.s(6),btnY,bw2,bh2,'下一关 ▶',C.neonGreen);
-    regBtn(cx+S.s(6),btnY,bw2,bh2,function(){gs.currentLevel++;loadLevel(gs.currentLevel);});
-  }else if(!win){
-    // 未通关：显示继续尝试
-    drawNeonBtn(cx+S.s(6),btnY,bw2,bh2,'再试',C.neonRed);
-    regBtn(cx+S.s(6),btnY,bw2,bh2,function(){loadLevel(gs.currentLevel);});
+    drawNeonBtn(cx+S.s(6),btnBaseY,bw2,bh2,'下一关 ▶',C.neonGreen);
+    regBtn(cx+S.s(6),btnBaseY,bw2,bh2,function(){gs.currentLevel++;loadLevel(gs.currentLevel);});
+  }else{
+    drawNeonBtn(cx+S.s(6),btnBaseY,bw2,bh2,'再试',C.neonRed);
+    regBtn(cx+S.s(6),btnBaseY,bw2,bh2,function(){loadLevel(gs.currentLevel);});
   }
 
-  // 返回主菜单
-  var backY=btnY+bh2+S.s(12);
-  var backW=S.s(200);
-  drawNeonBtn(cx-backW/2,backY,backW,bh2,'返回主菜单',C.textDim);
-  regBtn(cx-backW/2,backY,backW,bh2,function(){gs.currentScene='menu';});
+  // 第2行：返回主菜单
+  var row2Y=btnBaseY+bh2+S.s(10);
+  drawNeonBtn(cx-bw2/2,row2Y,bw2,bh2,'返回主菜单',C.textDim);
+  regBtn(cx-bw2/2,row2Y,bw2,bh2,function(){gs.currentScene='menu';});
 
-  // 关卡选择
-  var lvSelY=backY+bh2+S.s(10);
-  var lvSelW=S.s(200);
-  drawNeonBtn(cx-lvSelW/2,lvSelY,lvSelW,S.s(40),'关卡选择',C.neonCyan);
-  regBtn(cx-lvSelW/2,lvSelY,lvSelW,S.s(40),function(){gs.levelPage=Math.floor((progress.highestLevel-1)/20);gs.currentScene='levelselect';});
+  // 第3行：关卡选择
+  var row3Y=row2Y+bh2+S.s(10);
+  drawNeonBtn(cx-bw2/2,row3Y,bw2,bh2,'关卡选择',C.neonCyan);
+  regBtn(cx-bw2/2,row3Y,bw2,bh2,function(){gs.levelPage=Math.floor((progress.highestLevel-1)/20);gs.currentScene='levelselect';});
 
   // NPC
   drawNPC(px+S.s(5),py+S.s(5),S.s(40));
@@ -1878,18 +1864,27 @@ function renderLB(){
     var hasLocalData = gs.friendScores && gs.friendScores.length > 0 && gs.friendScores[0].score > 0;
 
     if(hasLocalData){
-      // 表头
+      // 表头 — 按关卡分数排列，不重复人名
       ctx.fillStyle=C.textDim;ctx.font='bold '+S.s(11)+'px Arial';ctx.textAlign='left';
       ctx.fillText('排名',S.sx(22),listY);
       ctx.textAlign='center';
-      ctx.fillText('玩家',canvas.width/2-S.s(20),listY);
+      ctx.fillText('关卡',canvas.width/2,listY);
       ctx.textAlign='right';
       ctx.fillText('得分',canvas.width-S.sx(22),listY);
 
       var medals = ['🥇','🥈','🥉'];
-      for(var i=0;i<Math.min(gs.friendScores.length,15);i++){
+      // V3.1.2: 按分数降序排列，去重（同一关卡只保留最高分）
+      var uniqueScores=[];
+      var seenLv={};
+      for(var fi=0;fi<gs.friendScores.length;fi++){
+        var flv=gs.friendScores[fi].level;
+        if(!seenLv[flv]){seenLv[flv]=true;uniqueScores.push(gs.friendScores[fi]);}
+      }
+      uniqueScores.sort(function(a,b){return b.score-a.score;});
+
+      for(var i=0;i<Math.min(uniqueScores.length,15);i++){
         var iy=listY+S.s(16)+i*itemH;
-        var d=gs.friendScores[i];
+        var d=uniqueScores[i];
         // 行背景
         ctx.fillStyle=d.isMe?'rgba(0,255,136,0.06)':(i%2===0?'rgba(20,25,45,0.3)':'rgba(10,15,35,0.2)');
         ctx.fillRect(S.sx(15),iy,canvas.width-S.sx(30),itemH-S.s(4));
@@ -1899,15 +1894,9 @@ function renderLB(){
         ctx.font='bold '+S.s(14)+'px Arial';ctx.textAlign='left';ctx.textBaseline='middle';
         ctx.fillText(i<3?medals[i]:(i+1)+'.',S.sx(22),iy+itemH/2-S.s(2));
 
-        // 名字
-        ctx.fillStyle=d.isMe?C.neonGreen:C.textMain;ctx.font=S.s(14)+'px Arial';ctx.textAlign='left';
-        var dn=(d.name||'???');
-        if(dn.length>8)dn=dn.substring(0,8)+'..';
-        ctx.fillText((d.isMe?'★ ':'')+dn,S.sx(60),iy+itemH/2-S.s(2));
-
         // 关卡
-        ctx.fillStyle=C.textDim;ctx.font=S.s(11)+'px Arial';ctx.textAlign='center';
-        ctx.fillText('L'+(d.level||'?'),canvas.width/2+S.s(30),iy+itemH/2-S.s(2));
+        ctx.fillStyle=C.textMain;ctx.font=S.s(14)+'px Arial';ctx.textAlign='center';
+        ctx.fillText('L'+(d.level||'?'),canvas.width/2,iy+itemH/2-S.s(2));
 
         // 分数
         ctx.fillStyle=C.neonGreen;ctx.textAlign='right';ctx.font='bold '+S.s(14)+'px Arial';

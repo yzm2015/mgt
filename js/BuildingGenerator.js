@@ -13,12 +13,12 @@ class BuildingGenerator {
     this.currentMechanics = [];
     
     this.blockTypes = {
-      wood: { color: '#DEB887', strokeColor: '#8B4513', health: 50, mass: 1.0, score: 10, friction: 0.3 },
-      brick: { color: '#FF6347', strokeColor: '#8B0000', health: 100, mass: 2.0, score: 20, friction: 0.5 },
-      steel: { color: '#808080', strokeColor: '#333333', health: 200, mass: 3.0, score: 30, friction: 0.8 },
-      ice: { color: '#ADD8E6', strokeColor: '#4682B4', health: 40, mass: 0.8, score: 15, friction: 0.1 },
-      rubber: { color: '#FF69B4', strokeColor: '#C71585', health: 30, mass: 0.5, score: 25, friction: 0.9, bounceiness: 1.5 },
-      tnt: { color: '#FF4500', strokeColor: '#8B0000', health: 20, mass: 1.5, score: 50, friction: 0.4, explosive: true }
+      wood: { color: '#DEB887', strokeColor: '#8B4513', health: 15, mass: 1.0, score: 10, friction: 0.3 },
+      brick: { color: '#FF6347', strokeColor: '#8B0000', health: 30, mass: 2.0, score: 20, friction: 0.5 },
+      steel: { color: '#808080', strokeColor: '#333333', health: 50, mass: 3.0, score: 30, friction: 0.8 },
+      ice: { color: '#ADD8E6', strokeColor: '#4682B4', health: 12, mass: 0.8, score: 15, friction: 0.1 },
+      rubber: { color: '#FF69B4', strokeColor: '#C71585', health: 10, mass: 0.5, score: 25, friction: 0.9, bounceiness: 1.5 },
+      tnt: { color: '#FF4500', strokeColor: '#8B0000', health: 8, mass: 1.5, score: 50, friction: 0.4, explosive: true }
     };
     
     this.themes = {
