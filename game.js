@@ -17,7 +17,7 @@ var BuildingGenerator = require('./js/BuildingGenerator');
 var AudioManager = require('./js/AudioManager').AudioManager;
 var SoundNames = require('./js/AudioManager').SoundNames;
 
-var VERSION = '3.1.0';
+var VERSION = '3.1.1';
 
 // ===== 配色（统一管理）=====
 var C = {
@@ -816,98 +816,32 @@ function update() {
   }
   // 建筑悬空检测
   checkFloatingBlocks();
+  // V3.1.1: 工具重生逻辑（从drawTools移到update中，渲染不应修改状态）
+  var groundY2=canvas.height-S.s(50);
+  for(var ri=0;ri<tools.length;ri++){
+    var rt=tools[ri];
+    if(rt.isActive && !rt.isGrabbed){
+      var rspd=Math.abs(rt.velocityX)+Math.abs(rt.velocityY);
+      if(rspd < 0.5 && rt.y + rt.height >= groundY2 - 3){
+        if(!rt._stillTimer) rt._stillTimer = 0;
+        rt._stillTimer++;
+        if(rt._stillTimer > 60){
+          rt.x = rt.respawnX; rt.y = rt.respawnY;
+          rt.velocityX = 0; rt.velocityY = 0;
+          rt._stillTimer = 0;
+          rt._swingBonus = undefined; // V3.1.1: 重置甩动加成
+          rt._hitCD = undefined; // 重置碰撞CD
+        }
+      } else {
+        rt._stillTimer = 0;
+      }
+    }
+  }
   // V3.1.0: 礼物系统更新
   updGifts();
   checkGiftCollect();
   // （得分已合并到上面碰撞处理中，不再单独调用checkToolHits）
   checkGameEnd();
-}
-
-// ===== 工具撞击建筑（核心得分逻辑）=====
-function checkToolHits() {
-  for(var ti=0;ti<tools.length;ti++){
-    var tool=tools[ti];
-    if(!tool.isActive||tool.isGrabbed) continue;
-    var spd=Math.sqrt(tool.velocityX*tool.velocityX+tool.velocityY*tool.velocityY);
-    if(spd<2.5) continue; // 速度不够不算撞击
-
-    for(var bi=0;bi<buildings.length;bi++){
-      var bld=buildings[bi];
-      if(bld.isDestroyed) continue;
-
-      // AABB碰撞
-      if(tool.x<bld.x+bld.width && tool.x+tool.width>bld.x && tool.y<bld.y+bld.height && tool.y+tool.height>bld.y){
-        // 碰撞方向
-        var dx=(bld.x+bld.width/2)-(tool.x+tool.width/2);
-        var dy=(bld.y+bld.height/2)-(tool.y+tool.height/2);
-        var dist=Math.sqrt(dx*dx+dy*dy);
-        // 角度系数: 从上方砸下(dy<0)最有效=1.0, 侧面=0.4~0.8
-        var angleFactor = dist>0 ? Math.max(0.4, Math.abs(-dy)/(dist+1)) : 1;
-
-        // 伤害 = 工具硬度 × 碰撞力度 × 角度系数 / 建筑防御
-        var impactForce = spd * tool.hardness;
-        var dmg = Math.max(1, impactForce * angleFactor / (bld.mass || 1));
-        var actualDmg = Math.min(dmg, bld.health);
-        bld.health -= actualDmg;
-
-        var cx=bld.x+bld.width/2, cy=bld.y+bld.height/2;
-        gs.shake=Math.min(6,impactForce*0.04);
-        audio.playSound(SoundNames.CRASH);
-        spawnSparks(cx,cy,bld.color||C.neonOrange,4);
-        addFloat(cx,cy-S.s(10),Math.floor(actualDmg)+'伤害',C.neonOrange);
-
-        if(bld.health<=0){
-          bld.health=0; bld.isDestroyed=true;
-          var pts=Math.max(1, Math.floor((bld.score||10) * tool.hardness * angleFactor));
-          gs.combo++; gs.comboTimer=150; // V3.0.9: 与主碰撞逻辑一致
-          if(gs.combo>1) pts=Math.floor(pts*(1+gs.combo*0.25)); // V3.0.9
-          pts=Math.max(1, pts);
-          gs.score+=pts;
-          gs.totalDestroys++;
-          if(gs.combo>gs.maxCombo) gs.maxCombo=gs.combo;
-          gs.totalScore+=pts;
-          gs.flash=0.1;
-
-          if(gs.combo>=5) gs.slowMo=6;
-
-          spawnDebris(cx,cy,bld.color||C.neonOrange,6);
-          spawnSparks(cx,cy,C.neonYellow,4);
-          addFloat(cx,cy,'+'+pts,gs.combo>1?C.neonYellow:C.neonGreen);
-          if(gs.combo>=3){
-            addFloat(cx,cy-S.s(25),gs.combo+'x COMBO!',C.neonPurple);
-            gs.shake=Math.min(10,gs.combo*2);
-          }
-
-          audio.playSound(SoundNames.DESTROY);
-          NPC.show(NPC.say(gs.combo>2?'combo':'hit'),60);
-
-          // 建筑爆炸（TNT方块）
-          if(bld.explosive){
-            gs.shake=12;gs.flash=0.2;
-            spawnDebris(cx,cy,C.neonRed,8);spawnSparks(cx,cy,C.neonYellow,6);
-            var bonusPts=0;
-            for(var k=0;k<buildings.length;k++){var bk=buildings[k];if(bk.isDestroyed||bk===bld)continue;
-              var dx2=(bk.x+bk.width/2)-cx,dy2=(bk.y+bk.height/2)-cy;
-              if(Math.sqrt(dx2*dx2+dy2*dy2)<120){bk.health-=40;if(bk.health<=0){bk.health=0;bk.isDestroyed=true;bonusPts+=Math.max(1,bk.score||10);spawnDebris(bk.x+bk.width/2,bk.y+bk.height/2,bk.color||C.neonRed,3);}}
-            }
-            if(bonusPts>0){gs.score+=bonusPts;addFloat(cx,cy-S.s(35),'爆炸+'+bonusPts,C.neonRed);}
-          }
-          addCollapse(bld);
-        }
-
-        // 工具反弹（已由update中的物理碰撞推出，这里只做速度反弹）
-        if(!bld.isDestroyed){
-          // 建筑没被摧毁，工具反弹力更大
-          tool.velocityX *= -0.5;
-          tool.velocityY = -Math.abs(tool.velocityY) * 0.4 - 2; // 弹起来一点
-        } else {
-          // 建筑被摧毁，工具继续运动但减速
-          tool.velocityY *= 0.6;
-        }
-        break;
-      }
-    }
-  }
 }
 
 // ===== 悬空检测（仅让悬空方块缓慢下落，不触发伤害）=====
@@ -1497,27 +1431,6 @@ function drawTools(){
     // 如果被抓住，画电弧
     if(t.isGrabbed && crane.magnet.isGrabbing && crane.magnet.grabbedBlock === t){
       // 已经在drawMag中处理
-    }
-  });
-
-  // 工具重生逻辑：被释放后落地的工具，静止后回到原位
-  tools.forEach(function(t){
-    if(t.isActive && !t.isGrabbed){
-      var spd=Math.abs(t.velocityX)+Math.abs(t.velocityY);
-      // 如果工具静止在地面，延迟2秒后重生
-      if(spd < 0.5 && t.y + t.height >= groundY - 3){
-        if(!t._stillTimer) t._stillTimer = 0;
-        t._stillTimer++;
-        if(t._stillTimer > 60){ // 1秒后重生（V3.0.8加快节奏）
-          t.x = t.respawnX;
-          t.y = t.respawnY;
-          t.velocityX = 0;
-          t.velocityY = 0;
-          t._stillTimer = 0;
-        }
-      } else {
-        t._stillTimer = 0;
-      }
     }
   });
 }
