@@ -43,6 +43,7 @@ var gameState = {
 var canvas, ctx, physics, crane, buildingGenerator, audioManager;
 var buildings = [], particles = [], floatingTexts = [];
 var gameTimer = null, loopRunning = false, frameCount = 0, lastTime = 0;
+var uiButtons = []; // 统一按钮注册表，渲染时写入，触摸时读取
 
 // 触摸状态
 var touch = { startX: 0, startY: 0, lastX: 0, lastY: 0, isDragging: false, dragDist: 0, startTime: 0, moved: false };
@@ -279,61 +280,28 @@ function bindTouchEvents() {
     var elapsed = Date.now() - touch.startTime;
     var isTap = !touch.moved || elapsed < 250;
 
-    switch (gameState.currentScene) {
-      case 'menu': handleMenuTouch(x, y); break;
-      case 'game': handleGameTouch(x, y, isTap); break;
-      case 'gameover': handleGameOverTouch(x, y); break;
-      case 'levelselect': handleLevelSelectTouch(x, y); break;
-      case 'leaderboard': handleBackTouch(x, y); break;
-      case 'instructions': handleBackTouch(x, y); break;
+    // 优先查找注册按钮
+    var btn = findBtn(x, y);
+    if (btn) {
+      audioManager.playSound(SoundNames.BUTTON);
+      btn.action();
+      touch.isDragging = false; touch.moved = false;
+      return;
+    }
+
+    // 游戏场景的特殊触摸（抓取/释放方块）
+    if (gameState.currentScene === 'game') {
+      handleGameTouch(x, y, isTap);
     }
     touch.isDragging = false; touch.moved = false;
   });
 }
 
-// ==================== 主菜单 ====================
-function handleMenuTouch(x, y) {
-  var cx = canvas.width / 2;
-  var btnW = SA.s(240), btnH = SA.s(52);
-  var startY = SA.safeY(260);
-  var labels = ['start', 'levels', 'rank', 'help'];
-  for (var i = 0; i < labels.length; i++) {
-    var btnY = startY + i * (btnH + SA.s(14));
-    if (x > cx-btnW/2 && x < cx+btnW/2 && y > btnY && y < btnY+btnH) {
-      audioManager.playSound(SoundNames.BUTTON);
-      switch(labels[i]) {
-        case 'start': loadLevel(gameState.currentLevel); break;
-        case 'levels': gameState.currentScene = 'levelselect'; break;
-        case 'rank': gameState.currentScene = 'leaderboard'; break;
-        case 'help': gameState.currentScene = 'instructions'; break;
-      }
-      return;
-    }
-  }
-}
+// 主菜单触摸已由按钮注册表处理
 
 // ==================== 游戏触摸（核心修复） ====================
 function handleGameTouch(x, y, isTap) {
-  // 返回主菜单按钮（左上角）
-  var backBtnX = SA.sx(8);
-  var backBtnY = SA.safeTop + SA.s(4);
-  var backBtnW = SA.s(60);
-  var backBtnH = SA.s(32);
-  if (x > backBtnX && x < backBtnX + backBtnW && y > backBtnY && y < backBtnY + backBtnH) {
-    audioManager.playSound(SoundNames.BUTTON);
-    gameState.currentScene = 'menu';
-    clearGameTimer();
-    gameState.gameActive = false;
-    NPC.showDialogue(NPC.say('back_menu'), 120);
-    return;
-  }
-
-  // 暂停按钮
-  if (x > canvas.width - SA.sx(65) && y < SA.safeTop + SA.s(40)) {
-    togglePause();
-    return;
-  }
-
+  // 返回菜单和暂停按钮已由按钮注册表处理
   if (gameState.gamePaused || !gameState.gameActive) return;
 
   if (isTap) {
@@ -385,42 +353,9 @@ function handleGameTouch(x, y, isTap) {
 }
 
 // ==================== 游戏结束触摸 ====================
-function handleGameOverTouch(x, y) {
-  var cx = canvas.width / 2;
-  var btnW = SA.s(130), btnH = SA.s(52);
-  var btnY = canvas.height / 2 + SA.s(50);
+// 游戏结束触摸已由按钮注册表处理
 
-  if (x > cx-btnW-SA.s(10) && x < cx-SA.s(10) && y > btnY && y < btnY+btnH) {
-    audioManager.playSound(SoundNames.BUTTON); loadLevel(gameState.currentLevel); return;
-  }
-  if (x > cx+SA.s(10) && x < cx+btnW+SA.s(10) && y > btnY && y < btnY+btnH) {
-    audioManager.playSound(SoundNames.BUTTON); gameState.currentLevel++; loadLevel(gameState.currentLevel); return;
-  }
-  var backY = btnY + btnH + SA.s(14);
-  if (x > cx-btnW/2 && x < cx+btnW/2 && y > backY && y < backY+btnH) {
-    audioManager.playSound(SoundNames.BUTTON); gameState.currentScene = 'menu'; return;
-  }
-}
-
-function handleLevelSelectTouch(x, y) {
-  var btnW = SA.s(280), btnH = SA.s(48);
-  var startY = SA.safeY(110);
-  for (var i = 0; i < 5; i++) {
-    var btnY = startY + i*(btnH+SA.s(10));
-    if (y > btnY && y < btnY+btnH) {
-      audioManager.playSound(SoundNames.BUTTON); gameState.currentLevel = i+1; loadLevel(gameState.currentLevel); return;
-    }
-  }
-  handleBackTouch(x, y);
-}
-
-function handleBackTouch(x, y) {
-  var btnW = SA.s(280), btnH = SA.s(50);
-  var backY = canvas.height - SA.sy(80);
-  if (x > (canvas.width-btnW)/2 && x < (canvas.width+btnW)/2 && y > backY && y < backY+btnH) {
-    audioManager.playSound(SoundNames.BUTTON); gameState.currentScene = 'menu';
-  }
-}
+// 关卡选择/返回触摸已由按钮注册表处理
 
 // ==================== 加载关卡 ====================
 function loadLevel(level) {
@@ -545,6 +480,7 @@ function saveToLeaderboard(level,score) {
 
 // ==================== 渲染 ====================
 function render() {
+  uiButtons = []; // 每帧重置按钮注册表
   ctx.save();
   if(gameState.screenShake>0) ctx.translate(gameState.screenShakeX,gameState.screenShakeY);
   switch(gameState.currentScene) {
@@ -556,6 +492,20 @@ function render() {
     case 'instructions': renderInstructions(); break;
   }
   ctx.restore();
+}
+
+// 注册按钮（渲染时调用）
+function regBtn(x, y, w, h, action) {
+  uiButtons.push({ x: x, y: y, w: w, h: h, action: action });
+}
+
+// 查找点击的按钮
+function findBtn(px, py) {
+  for (var i = 0; i < uiButtons.length; i++) {
+    var b = uiButtons[i];
+    if (px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) return b;
+  }
+  return null;
 }
 
 // ==================== 主菜单渲染 ====================
@@ -584,13 +534,20 @@ function renderMainMenu() {
     drawDialogueBubble(SA.sx(120), SA.safeY(35), SA.s(220), gameState.npcDialogue);
   }
 
-  // 按钮
+  // 按钮（渲染时注册到uiButtons，触摸时自动匹配）
   var cx=canvas.width/2, btnW=SA.s(240), btnH=SA.s(52), startY=SA.safeY(225);
   var labels=['开始游戏','关卡选择','排行榜','玩法说明'];
   var colors=[THEME.neonGreen,THEME.neonCyan,THEME.neonYellow,THEME.neonPurple];
+  var actions=[
+    function(){ loadLevel(gameState.currentLevel); },
+    function(){ gameState.currentScene='levelselect'; },
+    function(){ gameState.currentScene='leaderboard'; },
+    function(){ gameState.currentScene='instructions'; }
+  ];
   for(var i=0;i<labels.length;i++){
     var btnY=startY+i*(btnH+SA.s(14));
     drawSciButton(cx-btnW/2,btnY,btnW,btnH,labels[i],colors[i]);
+    regBtn(cx-btnW/2,btnY,btnW,btnH,actions[i]);
   }
 }
 
@@ -960,19 +917,21 @@ function drawGameUI() {
   ctx.fillStyle=THEME.neonYellow; ctx.textAlign='right'; ctx.fillText('L'+gameState.currentLevel+' 目标'+gameState.targetScore,canvas.width-SA.sx(70),midY);
   if(gameState.timeLeft<=5&&frameCount%30<15){ctx.fillStyle='rgba(255,50,50,0.15)';ctx.fillRect(0,0,canvas.width,canvas.height);}
 
-  // 返回主菜单按钮（左上角）
+  // 返回主菜单按钮（左上角）- 渲染+注册
   var backX=SA.sx(5), backY2=topBarY+SA.s(3), backW=SA.s(60), backH=SA.s(30);
   ctx.fillStyle='rgba(0,240,255,0.1)'; drawRR(ctx,backX,backY2,backW,backH,SA.s(4)); ctx.fill();
   ctx.strokeStyle=hexToRgba(THEME.neonCyan,0.4); ctx.lineWidth=SA.s(0.5); drawRR(ctx,backX,backY2,backW,backH,SA.s(4)); ctx.stroke();
   ctx.fillStyle=THEME.neonCyan; ctx.font=SA.s(12)+'px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText('菜单',backX+backW/2,backY2+backH/2);
+  regBtn(backX, backY2, backW, backH, function(){ gameState.currentScene='menu'; clearGameTimer(); gameState.gameActive=false; });
 
-  // 暂停按钮（右上角）
+  // 暂停按钮（右上角）- 渲染+注册
   var pauseX=canvas.width-SA.sx(60), pauseY=topBarY+SA.s(3), pauseW=SA.s(50), pauseH=SA.s(30);
   ctx.fillStyle='rgba(0,240,255,0.1)'; drawRR(ctx,pauseX,pauseY,pauseW,pauseH,SA.s(4)); ctx.fill();
   ctx.strokeStyle=hexToRgba(THEME.neonCyan,0.4); ctx.lineWidth=SA.s(0.5); drawRR(ctx,pauseX,pauseY,pauseW,pauseH,SA.s(4)); ctx.stroke();
   ctx.fillStyle=THEME.neonCyan; ctx.font=SA.s(12)+'px Arial'; ctx.textAlign='center';
   ctx.fillText(gameState.gamePaused?'继续':'暂停',pauseX+pauseW/2,pauseY+pauseH/2);
+  regBtn(pauseX, pauseY, pauseW, pauseH, function(){ togglePause(); });
 
   // 连击
   if(gameState.comboCount>1&&gameState.comboTimer>0){ctx.save();ctx.fillStyle=THEME.neonYellow;ctx.font='bold '+SA.s(16)+'px Arial';ctx.textAlign='center';ctx.shadowColor=THEME.neonYellow;ctx.shadowBlur=10;ctx.fillText(gameState.comboCount+'x COMBO!',canvas.width/2,topBarY+topBarH+SA.s(25));ctx.restore();}
@@ -1008,8 +967,11 @@ function renderGameOver(){
   ctx.fillStyle=THEME.textDim;ctx.fillText('目标: '+gameState.targetScore,cx,boxY+SA.s(168));
   var btnW=SA.s(130),btnH=SA.s(52),btnY=boxY+boxH-SA.s(85);
   drawSciButton(cx-btnW-SA.s(10),btnY,btnW,btnH,'重玩',THEME.neonRed);
+  regBtn(cx-btnW-SA.s(10),btnY,btnW,btnH,function(){ loadLevel(gameState.currentLevel); });
   drawSciButton(cx+SA.s(10),btnY,btnW,btnH,'下一关',THEME.neonGreen);
+  regBtn(cx+SA.s(10),btnY,btnW,btnH,function(){ gameState.currentLevel++; loadLevel(gameState.currentLevel); });
   drawSciButton(cx-btnW/2,btnY+btnH+SA.s(12),btnW,btnH,'返回主菜单',THEME.textDim);
+  regBtn(cx-btnW/2,btnY+btnH+SA.s(12),btnW,btnH,function(){ gameState.currentScene='menu'; });
 
   // NPC在结算页
   drawNPC(boxX + SA.s(5), boxY + boxH - SA.s(65), SA.s(50));
@@ -1029,8 +991,9 @@ function renderLevelSelect(){
   ctx.font='bold '+SA.s(26)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
   ctx.fillText('关卡选择',canvas.width/2,SA.safeY(55));ctx.restore();
   var btnW=SA.s(280),btnH=SA.s(48),startX=(canvas.width-btnW)/2,startY=SA.safeY(95);
-  for(var i=0;i<5;i++){var btnY=startY+i*(btnH+SA.s(10));drawSciButton(startX,btnY,btnW,btnH,'关卡 '+(i+1),THEME.neonCyan);}
+  for(var i=0;i<5;i++){var btnY=startY+i*(btnH+SA.s(10));drawSciButton(startX,btnY,btnW,btnH,'关卡 '+(i+1),THEME.neonCyan); (function(lv){regBtn(startX,btnY,btnW,btnH,function(){gameState.currentLevel=lv;loadLevel(lv);});})(i+1);}
   drawSciButton((canvas.width-btnW)/2,canvas.height-SA.sy(80),btnW,SA.s(50),'返回主菜单',THEME.neonRed);
+  regBtn((canvas.width-btnW)/2,canvas.height-SA.sy(80),btnW,SA.s(50),function(){gameState.currentScene='menu';});
 }
 
 function renderLeaderboard(){
@@ -1042,6 +1005,7 @@ function renderLeaderboard(){
   if(lb.length===0){ctx.fillStyle=THEME.textDim;ctx.font=SA.s(15)+'px Arial';ctx.fillText('暂无记录',canvas.width/2,canvas.height/2);}
   else{var medals=[THEME.neonYellow,'#C0C0C0','#CD7F32'];for(var i=0;i<Math.min(lb.length,10);i++){var ey=SA.safeY(100)+i*SA.s(36);ctx.fillStyle=i<3?medals[i]:THEME.textDim;ctx.font='bold '+SA.s(16)+'px Arial';ctx.textAlign='left';ctx.fillText((i+1)+'. L'+(lb[i].level||'-')+'  '+(lb[i].score||0)+'分',SA.sx(40),ey);}}
   drawSciButton((canvas.width-SA.s(280))/2,canvas.height-SA.sy(80),SA.s(280),SA.s(50),'返回主菜单',THEME.neonRed);
+  regBtn((canvas.width-SA.s(280))/2,canvas.height-SA.sy(80),SA.s(280),SA.s(50),function(){gameState.currentScene='menu';});
 }
 
 function renderInstructions(){
@@ -1057,6 +1021,7 @@ function renderInstructions(){
   drawNPC(canvas.width - SA.s(80), SA.safeY(300), SA.s(70));
 
   drawSciButton((canvas.width-SA.s(280))/2,canvas.height-SA.sy(80),SA.s(280),SA.s(50),'返回主菜单',THEME.neonRed);
+  regBtn((canvas.width-SA.s(280))/2,canvas.height-SA.sy(80),SA.s(280),SA.s(50),function(){gameState.currentScene='menu';});
 }
 
 // ==================== 启动 ====================
