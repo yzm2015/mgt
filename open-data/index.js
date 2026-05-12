@@ -62,9 +62,22 @@ function drawFriendRank() {
     return;
   }
 
-  var itemH = 40;
-  var startY = 10;
+  // V3.0.9: 适配主域drawImage位置
+  var itemH = 42;
+  var startY = 0;
   var medals = ['🥇', '🥈', '🥉'];
+
+  // 表头
+  ctx.fillStyle = '#6b7db3';
+  ctx.font = 'bold 12px Arial';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('排名', 22, startY + 10);
+  ctx.textAlign = 'center';
+  ctx.fillText('玩家', w / 2 - 20, startY + 10);
+  ctx.textAlign = 'right';
+  ctx.fillText('得分', w - 22, startY + 10);
+  startY += 24;
 
   for (var i = 0; i < Math.min(friendData.length, 10); i++) {
     var y = startY + i * itemH;
@@ -84,13 +97,21 @@ function drawFriendRank() {
     // 名字
     ctx.fillStyle = '#e0e8ff';
     ctx.font = '14px Arial';
+    ctx.textAlign = 'left';
     var name = d.name;
     if (name.length > 8) name = name.substring(0, 8) + '...';
-    ctx.fillText('L' + d.level + ' ' + name, 55, y + itemH / 2 - 2);
+    ctx.fillText(name, 55, y + itemH / 2 - 2);
+
+    // 关卡
+    ctx.fillStyle = '#6b7db3';
+    ctx.font = '11px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('L' + d.level, w / 2 + 30, y + itemH / 2 - 2);
 
     // 分数
     ctx.fillStyle = '#00ff88';
     ctx.textAlign = 'right';
+    ctx.font = 'bold 14px Arial';
     ctx.fillText(d.score + '分', w - 25, y + itemH / 2 - 2);
   }
 }

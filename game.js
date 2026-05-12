@@ -17,7 +17,7 @@ var BuildingGenerator = require('./js/BuildingGenerator');
 var AudioManager = require('./js/AudioManager').AudioManager;
 var SoundNames = require('./js/AudioManager').SoundNames;
 
-var VERSION = '3.0.8';
+var VERSION = '3.0.9';
 
 // ===== 配色（统一管理）=====
 var C = {
@@ -50,7 +50,7 @@ var CONFIG = { gravity: 0.5, ropeLength: 150, magnetRadius: 80, magnetPower: 0.8
 
 var gs = {
   score: 0, timeLeft: 60, gameActive: false, gamePaused: false,
-  currentLevel: 1, targetScore: 500, stars: 0, currentScene: 'menu',
+  currentLevel: 1, targetScore: 100, stars: 0, currentScene: 'menu',
   shake: 0, shakeX: 0, shakeY: 0, combo: 0, comboTimer: 0,
   flash: 0, pulse: 0, npcText: '', npcTimer: 0, npcQueue: [],
   userInfo: null, loggedIn: false, loginRetries: 0,
@@ -386,8 +386,21 @@ function loadFriendScores() {
   if (openDataContext) {
     try { openDataContext.postMessage({ action: 'getFriendRank' }); } catch(e) {}
   }
-  // 同时从本地历史记录读取（作为补充）
-  try { var d=wx.getStorageSync('leaderboard'); if(d)gs.friendScores=JSON.parse(d); } catch(e) {}
+  // V3.0.9: 同时从本地leaderboard读取（含自己历史记录）
+  try {
+    var d=[];var r=wx.getStorageSync('leaderboard');
+    if(r)d=JSON.parse(r);
+    // 把自己当前记录加入
+    var uname=(gs.userInfo&&gs.userInfo.nickName)||'我';
+    var myBest=0;
+    for(var i=0;i<d.length;i++){if(d[i].score>myBest)myBest=d[i].score;}
+    gs.friendScores=[{name:uname,score:myBest,level:progress.highestLevel,isMe:true}];
+    // 合并其他记录
+    for(var j=0;j<d.length;j++){
+      gs.friendScores.push({name:d[j].name||uname,score:d[j].score||0,level:d[j].level||1});
+    }
+    gs.friendScores.sort(function(a,b){return b.score-a.score;});
+  } catch(e) {}
   gs.lbFriendLoaded = true;
 }
 
@@ -578,8 +591,8 @@ function update() {
           if(bld.health<=0){
             bld.health=0;bld.isDestroyed=true;
             var pts=Math.max(1,Math.floor((bld.score||10)*t.hardness*angleFactor));
-            gs.combo++;gs.comboTimer=90;
-            if(gs.combo>1)pts=Math.floor(pts*(1+gs.combo*0.15));
+            gs.combo++;gs.comboTimer=150; // V3.0.9: 2.5秒连击窗口
+            if(gs.combo>1)pts=Math.floor(pts*(1+gs.combo*0.25)); // V3.0.9: 连击倍率0.25
             pts=Math.max(1,pts);gs.score+=pts;gs.totalDestroys++;
             if(gs.combo>gs.maxCombo)gs.maxCombo=gs.combo;
             gs.totalScore+=pts;gs.flash=0.1;
@@ -682,8 +695,8 @@ function checkToolHits() {
         if(bld.health<=0){
           bld.health=0; bld.isDestroyed=true;
           var pts=Math.max(1, Math.floor((bld.score||10) * tool.hardness * angleFactor));
-          gs.combo++; gs.comboTimer=90;
-          if(gs.combo>1) pts=Math.floor(pts*(1+gs.combo*0.15));
+          gs.combo++; gs.comboTimer=150; // V3.0.9: 与主碰撞逻辑一致
+          if(gs.combo>1) pts=Math.floor(pts*(1+gs.combo*0.25)); // V3.0.9
           pts=Math.max(1, pts);
           gs.score+=pts;
           gs.totalDestroys++;
@@ -937,11 +950,12 @@ function endGame(win){
   gs.gameActive=false;clearTimer();
   var pct=gs.targetScore>0?gs.score/gs.targetScore:0;
   gs.stars=pct>=1?3:pct>=.8?2:pct>=.5?1:0;
-  if(win||gs.stars>0){
+  // V3.0.9: 只要得分>0就保存进度，通关自动解锁下一关
+  if(gs.score>0){
     progress.complete(gs.currentLevel,gs.stars,gs.score);
     saveToCloud(gs.currentLevel,gs.score);
+    saveLB(gs.currentLevel,gs.score);
   }
-  if(win)saveLB(gs.currentLevel,gs.score);
   audio.playSound(win?SoundNames.WIN:SoundNames.LOSE);
   if(win) gs.slowMo = 15; // 胜利慢动作
   gs.currentScene='gameover';NPC.show(NPC.say(win?'win':'lose'),200);
@@ -1462,14 +1476,22 @@ function drawHUD(){
     ctx.fillText('🧲 '+curTool.name+' | 硬度:'+curTool.hardness+' | '+curTool.desc,canvas.width/2,ty+th+S.s(14));
   }
 
-  // 连击显示
+  // 连击显示（V3.0.9增强）
   if(gs.combo>=2){
-    ctx.fillStyle=C.neonPurple;ctx.font='bold '+S.s(16)+'px Arial';ctx.textAlign='center';
-    ctx.fillText(gs.combo+'x COMBO',canvas.width/2,ty+th+S.s(28));
+    var comboAlpha=0.6+Math.sin(gs.pulseTime*6)*0.4;
+    ctx.save();
+    ctx.fillStyle=hex2rgba(C.neonPurple,comboAlpha);ctx.font='bold '+S.s(20)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(gs.combo+'x COMBO!',canvas.width/2,ty+th+S.s(26));
+    // 连击倍率提示
+    var comboMult=(1+gs.combo*0.25).toFixed(2);
+    ctx.fillStyle=hex2rgba(C.neonYellow,comboAlpha*0.7);ctx.font=S.s(10)+'px Arial';
+    ctx.fillText('×'+comboMult+' 倍率',canvas.width/2,ty+th+S.s(42));
+    ctx.restore();
   }
 
-  // 得分进度条（V3.0.8新增）
-  var pbW=canvas.width-S.sx(20),pbH=S.s(4),pbX=S.sx(10),pbY=ty+th+S.s(34);
+  // 得分进度条（V3.0.9: 调整位置避免与连击重叠）
+  var pbOffset=gs.combo>=2?S.s(52):S.s(30);
+  var pbW=canvas.width-S.sx(20),pbH=S.s(4),pbX=S.sx(10),pbY=ty+th+pbOffset;
   var pct=gs.targetScore>0?Math.min(1,gs.score/gs.targetScore):0;
   ctx.fillStyle='rgba(0,0,0,0.3)';ctx.fillRect(pbX,pbY,pbW,pbH);
   ctx.fillStyle=pct>=1?C.neonGreen:pct>=0.5?C.neonCyan:C.neonRed;
@@ -1492,41 +1514,87 @@ function drawPause(){
 
 // ===== 结算 =====
 function renderGameOver(){
-  ctx.fillStyle='rgba(5,10,30,0.9)';ctx.fillRect(0,0,canvas.width,canvas.height);
-  var cx=canvas.width/2,bw=S.s(300),bh=S.s(320),bx=(canvas.width-bw)/2,by=(canvas.height-bh)/2;
-  ctx.fillStyle=C.panelBg;ctx.strokeStyle=C.panelBorder;ctx.lineWidth=S.s(1.5);
-  rr(ctx,bx,by,bw,bh,S.s(12));ctx.fill();rr(ctx,bx,by,bw,bh,S.s(12));ctx.stroke();
-
+  ctx.fillStyle='rgba(5,10,30,0.92)';ctx.fillRect(0,0,canvas.width,canvas.height);
   var win=gs.score>=gs.targetScore;
-  ctx.fillStyle=win?C.neonGreen:C.neonRed;ctx.font='bold '+S.s(26)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.fillText(win?'关卡通过!':'时间到!',cx,by+S.s(40));
+  var cx=canvas.width/2;
+  // 面板尺寸加大，避免内容溢出
+  var pw=S.s(310),ph=win?S.s(420):S.s(380);
+  var px=(canvas.width-pw)/2,py=(canvas.height-ph)/2;
+  ctx.fillStyle=C.panelBg;ctx.strokeStyle=C.panelBorder;ctx.lineWidth=S.s(1.5);
+  rr(ctx,px,py,pw,ph,S.s(12));ctx.fill();rr(ctx,px,py,pw,ph,S.s(12));ctx.stroke();
 
-  // 星级
-  var starY=by+S.s(70);
+  // 标题
+  ctx.fillStyle=win?C.neonGreen:C.neonRed;ctx.font='bold '+S.s(28)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(win?'关卡通过!':'时间到!',cx,py+S.s(40));
+
+  // 星级 - 居中排列
+  var starY=py+S.s(80);
   for(var si=0;si<3;si++){
-    ctx.font=S.s(32)+'px Arial';ctx.textAlign='center';
+    ctx.font=S.s(36)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillStyle=si<gs.stars?C.neonYellow:C.textDim;
-    ctx.fillText(si<gs.stars?'★':'☆',cx-S.s(30)+si*S.s(30),starY);
+    ctx.fillText(si<gs.stars?'★':'☆',cx-S.s(36)+si*S.s(36),starY);
   }
 
-  ctx.fillStyle=C.textMain;ctx.font=S.s(18)+'px Arial';ctx.textAlign='center';
-  ctx.fillText('得分: '+gs.score,cx,by+S.s(110));
-  ctx.fillStyle=C.textDim;ctx.fillText('目标: '+gs.targetScore,cx,by+S.s(138));
+  // 得分信息区
+  var infoY=py+S.s(120);
+  ctx.fillStyle=C.textMain;ctx.font='bold '+S.s(22)+'px Arial';ctx.textAlign='center';
+  ctx.fillText('得分: '+gs.score,cx,infoY);
+  ctx.fillStyle=C.textDim;ctx.font=S.s(15)+'px Arial';
+  ctx.fillText('目标: '+gs.targetScore,cx,infoY+S.s(28));
 
+  // 进度条
+  var barY=infoY+S.s(46),barW=S.s(220),barH=S.s(10);
+  var barX=cx-barW/2;
+  var pct=gs.targetScore>0?Math.min(1.5,gs.score/gs.targetScore):0;
+  ctx.fillStyle='rgba(0,0,0,0.4)';rr(ctx,barX,barY,barW,barH,S.s(5));ctx.fill();
+  ctx.fillStyle=pct>=1?C.neonGreen:pct>=0.7?C.neonCyan:C.neonRed;
+  rr(ctx,barX,barY,Math.min(barW,barW*pct),barH,S.s(5));ctx.fill();
+  ctx.fillStyle=C.textDim;ctx.font=S.s(9)+'px Arial';ctx.textAlign='right';
+  ctx.fillText(Math.floor(pct*100)+'%',barX+barW-S.s(3),barY+barH-S.s(0.5));
+
+  // 关卡信息
   var mc=getMechanicForLevel(gs.currentLevel);
-  ctx.fillStyle=mc.color;ctx.font=S.s(11)+'px Arial';ctx.textAlign='center';
-  ctx.fillText('L'+gs.currentLevel+' ['+mc.name+'] '+mc.desc,cx,by+S.s(162));
+  ctx.fillStyle=mc.color;ctx.font=S.s(12)+'px Arial';ctx.textAlign='center';
+  ctx.fillText('L'+gs.currentLevel+' ['+mc.name+'] '+mc.desc,cx,infoY+S.s(68));
 
-  var bw2=S.s(130),bh2=S.s(50),by2=by+bh-S.s(90);
-  drawNeonBtn(cx-bw2-S.s(8),by2,bw2,bh2,'重玩',C.neonRed);
-  regBtn(cx-bw2-S.s(8),by2,bw2,bh2,function(){loadLevel(gs.currentLevel);});
-  if(win&&gs.currentLevel<1000){
-    drawNeonBtn(cx+S.s(8),by2,bw2,bh2,'下一关',C.neonGreen);
-    regBtn(cx+S.s(8),by2,bw2,bh2,function(){gs.currentLevel++;loadLevel(gs.currentLevel);});
+  // 连击统计
+  if(gs.maxCombo>0){
+    ctx.fillStyle=C.neonPurple;ctx.font='bold '+S.s(14)+'px Arial';ctx.textAlign='center';
+    ctx.fillText('最高连击: '+gs.maxCombo+'x',cx,infoY+S.s(92));
   }
-  drawNeonBtn(cx-bw2/2,by2+bh2+S.s(10),bw2,bh2,'返回主菜单',C.textDim);
-  regBtn(cx-bw2/2,by2+bh2+S.s(10),bw2,bh2,function(){gs.currentScene='menu';});
-  drawNPC(bx+S.s(5),by+bh-S.s(55),S.s(45));
+
+  // 按钮区
+  var btnY=py+ph-S.s(130);
+  var bw2=S.s(130),bh2=S.s(48);
+
+  // 重玩按钮
+  drawNeonBtn(cx-bw2-S.s(6),btnY,bw2,bh2,'重玩',C.neonOrange);
+  regBtn(cx-bw2-S.s(6),btnY,bw2,bh2,function(){loadLevel(gs.currentLevel);});
+
+  // 下一关按钮（通关才显示）
+  if(win&&gs.currentLevel<1000){
+    drawNeonBtn(cx+S.s(6),btnY,bw2,bh2,'下一关 ▶',C.neonGreen);
+    regBtn(cx+S.s(6),btnY,bw2,bh2,function(){gs.currentLevel++;loadLevel(gs.currentLevel);});
+  }else if(!win){
+    // 未通关：显示继续尝试
+    drawNeonBtn(cx+S.s(6),btnY,bw2,bh2,'再试',C.neonRed);
+    regBtn(cx+S.s(6),btnY,bw2,bh2,function(){loadLevel(gs.currentLevel);});
+  }
+
+  // 返回主菜单
+  var backY=btnY+bh2+S.s(12);
+  var backW=S.s(200);
+  drawNeonBtn(cx-backW/2,backY,backW,bh2,'返回主菜单',C.textDim);
+  regBtn(cx-backW/2,backY,backW,bh2,function(){gs.currentScene='menu';});
+
+  // 关卡选择
+  var lvSelY=backY+bh2+S.s(10);
+  var lvSelW=S.s(200);
+  drawNeonBtn(cx-lvSelW/2,lvSelY,lvSelW,S.s(40),'关卡选择',C.neonCyan);
+  regBtn(cx-lvSelW/2,lvSelY,lvSelW,S.s(40),function(){gs.levelPage=Math.floor((progress.highestLevel-1)/20);gs.currentScene='levelselect';});
+
+  // NPC
+  drawNPC(px+S.s(5),py+S.s(5),S.s(40));
 }
 
 // ===== 关卡选择（全新UI）=====
@@ -1557,7 +1625,12 @@ function renderLevelSel(){
   var page=gs.levelPage;
   if(page<0)page=0;if(page>=totalPage)page=totalPage-1;gs.levelPage=page;
 
-  var cellW=S.s(58),cellH=S.s(58),gapX=S.s(8),gapY=S.s(8);
+  // V3.0.9: 自适应格子大小，确保网格不超出屏幕
+  var availW=canvas.width-S.sx(20); // 两侧各留10
+  var cellW=Math.min(S.s(58),Math.floor((availW-(cols-1)*S.s(6))/cols));
+  var cellH=cellW; // 正方形格子
+  var gapX=Math.max(S.s(4),Math.floor((availW-cols*cellW)/(cols-1)));
+  var gapY=S.s(6);
   var gridW=cols*cellW+(cols-1)*gapX;
   var startX=(canvas.width-gridW)/2;
   var startY=S.safY(78);
@@ -1692,27 +1765,64 @@ function renderLB(){
   var listY=tabY+tabH+S.s(12),itemH=S.s(40);
 
   if(gs.lbTab==='friend'){
-    // 好友排行 - 使用开放数据域
-    var hasFriendData = false;
+    // 好友排行 - V3.0.9: 优先显示本地历史记录+开放数据域
+    var hasLocalData = gs.friendScores && gs.friendScores.length > 0 && gs.friendScores[0].score > 0;
 
-    // 优先尝试绘制开放数据域画布
+    if(hasLocalData){
+      // 表头
+      ctx.fillStyle=C.textDim;ctx.font='bold '+S.s(11)+'px Arial';ctx.textAlign='left';
+      ctx.fillText('排名',S.sx(22),listY);
+      ctx.textAlign='center';
+      ctx.fillText('玩家',canvas.width/2-S.s(20),listY);
+      ctx.textAlign='right';
+      ctx.fillText('得分',canvas.width-S.sx(22),listY);
+
+      var medals = ['🥇','🥈','🥉'];
+      for(var i=0;i<Math.min(gs.friendScores.length,15);i++){
+        var iy=listY+S.s(16)+i*itemH;
+        var d=gs.friendScores[i];
+        // 行背景
+        ctx.fillStyle=d.isMe?'rgba(0,255,136,0.06)':(i%2===0?'rgba(20,25,45,0.3)':'rgba(10,15,35,0.2)');
+        ctx.fillRect(S.sx(15),iy,canvas.width-S.sx(30),itemH-S.s(4));
+
+        // 排名
+        ctx.fillStyle=i<3?['#FFD700','#C0C0C0','#CD7F32'][i]:C.textDim;
+        ctx.font='bold '+S.s(14)+'px Arial';ctx.textAlign='left';ctx.textBaseline='middle';
+        ctx.fillText(i<3?medals[i]:(i+1)+'.',S.sx(22),iy+itemH/2-S.s(2));
+
+        // 名字
+        ctx.fillStyle=d.isMe?C.neonGreen:C.textMain;ctx.font=S.s(14)+'px Arial';ctx.textAlign='left';
+        var dn=(d.name||'???');
+        if(dn.length>8)dn=dn.substring(0,8)+'..';
+        ctx.fillText((d.isMe?'★ ':'')+dn,S.sx(60),iy+itemH/2-S.s(2));
+
+        // 关卡
+        ctx.fillStyle=C.textDim;ctx.font=S.s(11)+'px Arial';ctx.textAlign='center';
+        ctx.fillText('L'+(d.level||'?'),canvas.width/2+S.s(30),iy+itemH/2-S.s(2));
+
+        // 分数
+        ctx.fillStyle=C.neonGreen;ctx.textAlign='right';ctx.font='bold '+S.s(14)+'px Arial';
+        ctx.fillText((d.score||0)+'分',canvas.width-S.sx(22),iy+itemH/2-S.s(2));
+      }
+    }
+
+    // 尝试绘制开放数据域画布（覆盖在本地数据之上）
     if(openDataContext){
       try{
         var sharedCanvas=openDataContext.canvas;
         if(sharedCanvas){
           ctx.drawImage(sharedCanvas,0,listY,canvas.width,canvas.height-listY-S.s(80));
-          hasFriendData = true;
         }
       }catch(e){}
     }
 
-    // 如果开放数据域没有数据，显示提示
-    if(!hasFriendData){
+    // 如果没有本地数据也没有开放数据域数据
+    if(!hasLocalData&&(!openDataContext||!openDataContext.canvas)){
       ctx.fillStyle=C.textDim;ctx.font=S.s(14)+'px Arial';ctx.textAlign='center';
-      ctx.fillText('需要微信好友也在玩此游戏',canvas.width/2,listY+S.s(40));
-      ctx.fillText('好友数据才会显示在排行榜中',canvas.width/2,listY+S.s(65));
+      ctx.fillText('还没有分数记录',canvas.width/2,listY+S.s(40));
+      ctx.fillText('完成关卡后分数将自动上传',canvas.width/2,listY+S.s(65));
       ctx.fillStyle=hex2rgba(C.neonCyan,0.3);ctx.font=S.s(12)+'px Arial';
-      ctx.fillText('分享给好友一起玩吧！',canvas.width/2,listY+S.s(95));
+      ctx.fillText('邀请好友一起玩，排名更精彩！',canvas.width/2,listY+S.s(95));
     }
   }else{
     // 我的排行 - 显示真实历史数据

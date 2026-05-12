@@ -48,7 +48,7 @@ class BuildingGenerator {
       woodRatio: 0.5, brickRatio: 0.3, steelRatio: 0.2,
       iceRatio: 0, rubberRatio: 0, tntRatio: 0,
       timeLimit: Math.max(30, 90 - Math.floor(level / 10)),
-      targetScore: 500 + level * 10
+      targetScore: Math.floor(80 + level * 15 + Math.floor(level/10) * 20)  // V3.0.9: L1=95, 渐进增长
     };
     if (level >= 11) params.tntRatio = 0.05;
     if (level >= 21) params.iceRatio = 0.1;
