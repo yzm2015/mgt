@@ -17,7 +17,7 @@ var BuildingGenerator = require('./js/BuildingGenerator');
 var AudioManager = require('./js/AudioManager').AudioManager;
 var SoundNames = require('./js/AudioManager').SoundNames;
 
-var VERSION = '3.0.9';
+var VERSION = '3.1.0';
 
 // ===== 配色（统一管理）=====
 var C = {
@@ -62,7 +62,12 @@ var gs = {
   // 每日奖励
   dailyReward: false, loginStreak: 0, lastLoginDate: '',
   // 成就
-  totalDestroys: 0, maxCombo: 0, totalScore: 0
+  totalDestroys: 0, maxCombo: 0, totalScore: 0,
+  // V3.1.0: 甩动加速系统
+  peakSwingAV: 0,      // 本次抓取中的最大摆动角速度
+  powerUpHardness: 0,   // 强化工具剩余次数
+  // V3.1.0: 礼物系统
+  gifts: []             // 场景中的礼物对象
 };
 
 // ===== 对象池（减少GC压力）=====
@@ -185,6 +190,144 @@ function getMechanicForLevel(lv) {
   var r = MECHANICS[0];
   for (var i = 0; i < MECHANICS.length; i++) { if (lv >= MECHANICS[i].level) r = MECHANICS[i]; }
   return r;
+}
+
+// ===== V3.1.0: 礼物系统 =====
+var GIFT_DEFS = [
+  { id:'blessing', name:'祝福', emoji:'🎉', color:'#FFE033', weight:35,
+    desc:['运气爆棚!','太棒了!','势如破竹!','拆迁之王!','无人能挡!'],
+    apply:function(cx,cy){
+      var msg=this.desc[Math.floor(Math.random()*this.desc.length)];
+      addFloat(cx,cy-S.s(30),msg,this.color);
+      gs.score+=5;addFloat(cx,cy-S.s(50),'+5',C.neonGreen);
+    }
+  },
+  { id:'powerUp', name:'强化', emoji:'⚡', color:'#00FF88', weight:20,
+    apply:function(cx,cy){
+      gs.powerUpHardness+=3; // 下3次投掷硬度+1
+      addFloat(cx,cy-S.s(30),'⚡工具强化×3!','#00FF88');
+      spawnSparks(cx,cy,C.neonGreen,6);
+      try{wx.vibrateShort({type:'medium'});}catch(e){}
+    }
+  },
+  { id:'extraTime', name:'加时', emoji:'⏰', color:'#00F0FF', weight:20,
+    apply:function(cx,cy){
+      gs.timeLeft+=8;
+      addFloat(cx,cy-S.s(30),'⏰+8秒!','#00F0FF');
+    }
+  },
+  { id:'randomBoom', name:'爆破', emoji:'💥', color:'#FF3366', weight:15,
+    apply:function(cx,cy){
+      var alive=[];
+      for(var i=0;i<buildings.length;i++){if(!buildings[i].isDestroyed)alive.push(buildings[i]);}
+      if(alive.length>0){
+        var target=alive[Math.floor(Math.random()*alive.length)];
+        target.health=0;target.isDestroyed=true;
+        var tx=target.x+target.width/2,ty2=target.y+target.height/2;
+        spawnDebris(tx,ty2,target.color||C.neonRed,6);
+        spawnSparks(tx,ty2,C.neonYellow,4);
+        var bp=Math.max(1,target.score||10);
+        gs.score+=bp;
+        addFloat(tx,ty2,'💥+'+bp,C.neonRed);
+        gs.shake=8;
+        addCollapse(target);
+      }
+      addFloat(cx,cy-S.s(30),'💥随机爆破!','#FF3366');
+    }
+  },
+  { id:'addBuilding', name:'增建', emoji:'🏗️', color:'#B44AFF', weight:10,
+    apply:function(cx,cy){
+      // 随机在场景中添加一个方块（更多分数机会）
+      var gy=canvas.height-S.s(50);
+      var bw=S.s(45),bh=S.s(38);
+      var nx=S.s(20)+Math.random()*(canvas.width-bw-S.s(40));
+      var ny=gy-bh-S.s(2);
+      var btypes=['wood','brick','ice'];
+      var bt=btypes[Math.floor(Math.random()*btypes.length)];
+      var bdef=bg.blockTypes[bt];
+      buildings.push({
+        x:nx,y:ny,width:bw,height:bh,type:bt,
+        color:bdef.color,strokeColor:bdef.strokeColor,
+        health:bdef.health,maxHealth:bdef.health,
+        mass:bdef.mass,score:bdef.score+5,friction:bdef.friction,
+        velocityX:0,velocityY:0,isGrabbed:false,isDestroyed:false,explosive:false
+      });
+      addFloat(cx,cy-S.s(30),'🏗️新增建筑!','#B44AFF');
+      spawnSparks(nx+bw/2,ny+bh/2,C.neonPurple,4);
+    }
+  }
+];
+
+// 礼物掉落判定
+function tryDropGift(cx,cy){
+  var dropRate=0.22; // 22%概率掉礼物
+  if(Math.random()>dropRate) return;
+  // 加权随机选择
+  var totalW=0;for(var i=0;i<GIFT_DEFS.length;i++)totalW+=GIFT_DEFS[i].weight;
+  var roll=Math.random()*totalW,acc=0;
+  for(var j=0;j<GIFT_DEFS.length;j++){
+    acc+=GIFT_DEFS[j].weight;
+    if(roll<acc){
+      var def=GIFT_DEFS[j];
+      gs.gifts.push({x:cx,y:cy,def:def,life:90,vy:-3,collected:false});
+      break;
+    }
+  }
+}
+
+// 礼物更新
+function updGifts(){
+  for(var i=gs.gifts.length-1;i>=0;i--){
+    var g=gs.gifts[i];
+    g.y+=g.vy;g.vy+=0.05; // 轻微上浮后下落
+    g.life--;
+    if(g.life<=0||g.collected){
+      if(!g.collected&&g.life<=0){
+        // 礼物消失未收集 - 不触发效果
+      }
+      gs.gifts.splice(i,1);
+    }
+  }
+}
+
+// 礼物碰撞检测（工具碰到礼物就收集）
+function checkGiftCollect(){
+  for(var i=0;i<gs.gifts.length;i++){
+    var g=gs.gifts[i];
+    if(g.collected) continue;
+    for(var j=0;j<tools.length;j++){
+      var t=tools[j];
+      if(!t.isActive) continue;
+      // 简单距离检测
+      var dx=(t.x+t.width/2)-g.x,dy=(t.y+t.height/2)-g.y;
+      if(Math.sqrt(dx*dx+dy*dy)<S.s(35)){
+        g.collected=true;
+        g.def.apply(g.x,g.y);
+        try{audio.playSound(SoundNames.DESTROY);}catch(e){}
+        spawnSparks(g.x,g.y,g.def.color,5);
+      }
+    }
+  }
+}
+
+// 礼物渲染
+function drawGifts(){
+  for(var i=0;i<gs.gifts.length;i++){
+    var g=gs.gifts[i];
+    if(g.collected) continue;
+    var alpha=g.life<20?g.life/20:1;
+    ctx.save();ctx.globalAlpha=alpha;
+    // 发光背景
+    ctx.fillStyle=hex2rgba(g.def.color,0.15);
+    ctx.beginPath();ctx.arc(g.x,g.y,S.s(18),0,Math.PI*2);ctx.fill();
+    // emoji
+    ctx.font=S.s(22)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(g.def.emoji,g.x,g.y);
+    // 名称
+    ctx.fillStyle=g.def.color;ctx.font='bold '+S.s(8)+'px Arial';
+    ctx.fillText(g.def.name,g.x,g.y+S.s(16));
+    ctx.restore();
+  }
 }
 
 var canvas, ctx, physics, crane, bg, audio;
@@ -579,7 +722,10 @@ function update() {
           var dy=(bld.y+bld.height/2)-(t.y+t.height/2);
           var dist=Math.sqrt(dx*dx+dy*dy);
           var angleFactor=dist>0?Math.max(0.4,Math.abs(-dy)/(dist+1)):1;
-          var impactForce=spd*t.hardness;
+          // V3.1.0: 甩动加速加成
+          var swingBonus=t._swingBonus||1;
+          var effectiveHardness=t.hardness*swingBonus;
+          var impactForce=spd*effectiveHardness;
           var dmg=Math.max(1,impactForce*angleFactor/(bld.mass||1));
           var actualDmg=Math.min(dmg,bld.health);
           bld.health-=actualDmg;
@@ -590,19 +736,34 @@ function update() {
           addFloat(cx,cy-S.s(10),Math.floor(actualDmg)+'伤害',C.neonOrange);
           if(bld.health<=0){
             bld.health=0;bld.isDestroyed=true;
-            var pts=Math.max(1,Math.floor((bld.score||10)*t.hardness*angleFactor));
-            gs.combo++;gs.comboTimer=150; // V3.0.9: 2.5秒连击窗口
-            if(gs.combo>1)pts=Math.floor(pts*(1+gs.combo*0.25)); // V3.0.9: 连击倍率0.25
+            var pts=Math.max(1,Math.floor((bld.score||10)*effectiveHardness*angleFactor));
+            gs.combo++;gs.comboTimer=150;
+            if(gs.combo>1)pts=Math.floor(pts*(1+gs.combo*0.25));
             pts=Math.max(1,pts);gs.score+=pts;gs.totalDestroys++;
             if(gs.combo>gs.maxCombo)gs.maxCombo=gs.combo;
             gs.totalScore+=pts;gs.flash=0.1;
             if(gs.combo>=5)gs.slowMo=6;
+            // V3.1.0: 甩动加成提示
+            if(swingBonus>1.3){
+              addFloat(cx,cy-S.s(15),'甩动×'+swingBonus.toFixed(1)+'!',C.neonCyan);
+            }
+            // V3.1.0: 强化工具消耗
+            if(t._enhanced&&gs.powerUpHardness>0){
+              gs.powerUpHardness--;
+              if(gs.powerUpHardness<=0){
+                t.hardness=t._origHardness||t.hardness;
+                t._enhanced=false;
+                addFloat(cx,cy-S.s(40),'强化结束',C.textDim);
+              }
+            }
             spawnDebris(cx,cy,bld.color||C.neonOrange,6);
             spawnSparks(cx,cy,C.neonYellow,4);
             addFloat(cx,cy,'+'+pts,gs.combo>1?C.neonYellow:C.neonGreen);
             if(gs.combo>=3){addFloat(cx,cy-S.s(25),gs.combo+'x COMBO!',C.neonPurple);gs.shake=Math.min(12,gs.combo*2);}
             try{audio.playSound(SoundNames.DESTROY);}catch(e){}
             NPC.show(NPC.say(gs.combo>2?'combo':'hit'),60);
+            // V3.1.0: 礼物掉落
+            tryDropGift(cx,cy);
             if(bld.explosive){
               gs.shake=12;gs.flash=0.2;
               spawnDebris(cx,cy,C.neonRed,8);spawnSparks(cx,cy,C.neonYellow,6);
@@ -655,6 +816,9 @@ function update() {
   }
   // 建筑悬空检测
   checkFloatingBlocks();
+  // V3.1.0: 礼物系统更新
+  updGifts();
+  checkGiftCollect();
   // （得分已合并到上面碰撞处理中，不再单独调用checkToolHits）
   checkGameEnd();
 }
@@ -797,7 +961,12 @@ function bindTouch(){
     touch.dist+=Math.abs(dx);if(touch.dist>8)touch.moved=true;
     if(gs.currentScene==='game'&&gs.gameActive&&!gs.gamePaused&&Math.abs(dx)>2){
       crane.move(dx>0?1:-1);
-      if(crane.magnet.isGrabbing) crane.pendulum.angularVelocity+=dx*0.004;
+      if(crane.magnet.isGrabbing){
+        crane.pendulum.angularVelocity+=dx*0.004;
+        // V3.1.0: 记录最大摆动速度
+        var absAV=Math.abs(crane.pendulum.angularVelocity);
+        if(absAV>gs.peakSwingAV) gs.peakSwingAV=absAV;
+      }
     }
     touch.lx=t.clientX;touch.ly=t.clientY;
   });
@@ -816,15 +985,19 @@ function handleGame(x,y,isTap){
   if(isTap){
     if(crane.isGrabbing()){
       // === 释放工具 ===
-      // 保存摆动状态（releaseMagnet会重置angularVelocity=0，V3.0.8修复）
       var savedAV=crane.pendulum.angularVelocity;
-      var swingDir=savedAV>0.01?1:(savedAV<-0.01?-1:1); // 默认向右抛
-      var swingPower=Math.max(8,5+Math.abs(savedAV)*80);
+      var swingDir=savedAV>0.01?1:(savedAV<-0.01?-1:1);
+      // V3.1.0: 甩动加速度加分 — 摆动越快投掷越猛
+      var peakAV=gs.peakSwingAV||0;
+      var swingPower=Math.max(8, 5+Math.abs(savedAV)*80 + peakAV*30); // 加速度贡献额外投掷力
+      var swingBonus=1+peakAV*3; // 甩动速度乘数：peakAV=0.1→1.3x, 0.3→1.9x, 0.5→2.5x
       var block=crane.releaseMagnet();
       if(block){
-        block.velocityX=swingDir*swingPower; // 不再除以mass，保证足够投掷力
-        block.velocityY=-8; // 统一向上抛
+        block.velocityX=swingDir*swingPower;
+        block.velocityY=-8;
         block.isGrabbed=false;
+        block._swingBonus=swingBonus; // V3.1.0: 记录甩动加成，碰撞时使用
+        gs.peakSwingAV=0; // 重置
         audio.playSound(SoundNames.RELEASE);
         spawnSparks(block.x+block.width/2,block.y,C.neonCyan,4);
         NPC.show(NPC.say('swing'),60);
@@ -847,6 +1020,14 @@ function handleGame(x,y,isTap){
         best.y=crane.magnet.y+crane.magnet.radius+4;
         crane.crane.x=crane.magnet.x;
         crane.pendulum.angle=0;crane.pendulum.angularVelocity=0;
+        gs.peakSwingAV=0; // V3.1.0: 重置甩动记录
+        // V3.1.0: 强化工具效果
+        if(gs.powerUpHardness>0){
+          best._origHardness=best.hardness;
+          best.hardness+=1;
+          best._enhanced=true;
+          addFloat(best.x+best.width/2,best.y-S.s(10),'⚡强化!',C.neonGreen);
+        }
         best.velocityX=0;best.velocityY=0;
         audio.playSound(SoundNames.GRAB);
         spawnSparks(crane.magnet.x,crane.magnet.y,C.neonPurple,5);
@@ -929,6 +1110,7 @@ function loadLevel(lv){
   gs.targetScore=bg.getTargetScore(lv);gs.timeLeft=bg.getTimeLimit(lv);
   gs.score=0;gs.gameActive=true;gs.gamePaused=false;gs.currentScene='game';
   gs.combo=0;gs.comboTimer=0;gs.slowMo=0;
+  gs.gifts=[];gs.peakSwingAV=0;gs.powerUpHardness=0; // V3.1.0: 重置礼物和强化
   particles.length=0;floats.length=0;
   crane.crane.x=canvas.width/2;crane.pendulum.ropeLength=Math.floor(S.h*0.25);
   crane.magnet.x=crane.crane.x;crane.magnet.y=crane.crane.y+crane.crane.height+crane.pendulum.ropeLength;
@@ -1178,7 +1360,7 @@ function renderGame(){
   drawBuildings();
   drawTools();
   drawCrane();
-  drawParticles();drawFloats();
+  drawParticles();drawFloats();drawGifts(); // V3.1.0: 礼物渲染
 
   // 慢动作效果 - 仅HUD提示，不全屏色块
   // (不画全屏半透明层，避免视觉干扰)
@@ -1469,11 +1651,25 @@ function drawHUD(){
   ctx.fillStyle=C.neonCyan;ctx.font=S.s(11)+'px Arial';ctx.textAlign='center';ctx.fillText(gs.gamePaused?'继续':'暂停',px+pw/2,py+ph/2);
   regBtn(px,py,pw,ph,function(){gs.gamePaused=!gs.gamePaused;});
 
-  // 当前工具信息
+  // 当前工具信息 + V3.1.0: 甩动/强化状态
   if(crane.isGrabbing() && crane.magnet.grabbedBlock){
     var curTool = crane.magnet.grabbedBlock;
+    var toolInfo='🧲 '+curTool.name+' 硬度:'+curTool.hardness.toFixed(1);
+    if(curTool._enhanced) toolInfo+=' ⚡强化';
     ctx.fillStyle=C.neonGreen;ctx.font='bold '+S.s(12)+'px Arial';ctx.textAlign='center';
-    ctx.fillText('🧲 '+curTool.name+' | 硬度:'+curTool.hardness+' | '+curTool.desc,canvas.width/2,ty+th+S.s(14));
+    ctx.fillText(toolInfo,canvas.width/2,ty+th+S.s(14));
+    // 甩动加成条
+    var swBarW=S.s(120),swBarH=S.s(4),swBarX=canvas.width/2-swBarW/2,swBarY=ty+th+S.s(22);
+    var swPct=Math.min(1,gs.peakSwingAV/0.5);
+    ctx.fillStyle='rgba(0,0,0,0.3)';ctx.fillRect(swBarX,swBarY,swBarW,swBarH);
+    ctx.fillStyle=swPct>0.6?C.neonGreen:swPct>0.3?C.neonCyan:C.textDim;
+    ctx.fillRect(swBarX,swBarY,swBarW*swPct,swBarH);
+    if(swPct>0.1){ctx.fillStyle=hex2rgba(C.neonCyan,0.7);ctx.font=S.s(7)+'px Arial';ctx.textAlign='right';ctx.fillText('甩力×'+(1+gs.peakSwingAV*3).toFixed(1),swBarX+swBarW,swBarY-S.s(1));}
+  }
+  // V3.1.0: 强化剩余次数
+  if(gs.powerUpHardness>0){
+    ctx.fillStyle=C.neonGreen;ctx.font='bold '+S.s(10)+'px Arial';ctx.textAlign='left';
+    ctx.fillText('⚡强化×'+gs.powerUpHardness,S.sx(10),ty+th+S.s(14));
   }
 
   // 连击显示（V3.0.9增强）
