@@ -1,1031 +1,659 @@
 /**
- * 磁吸拆迁队 - 微信小游戏 V2.1
- * 修复操控流程 + NPC引导 + 返回菜单
+ * 磁吸拆迁队 V3.0 - 完整重写
+ * 玩法流程：点击抓取 → 滑动甩动 → 松手释放 → 砸中得分 → 建筑倒塌
  */
 
-// ==================== 模块导入 ====================
 var PhysicsSystem = require('./js/PhysicsSystem');
 var CraneController = require('./js/CraneController');
 var BuildingGenerator = require('./js/BuildingGenerator');
 var AudioManager = require('./js/AudioManager').AudioManager;
 var SoundNames = require('./js/AudioManager').SoundNames;
 
-// ==================== 科幻配色 ====================
-var THEME = {
-  bgDark: '#070b1a', bgMid: '#0d1333', bgLight: '#141b4d',
-  neonCyan: '#00f0ff', neonPurple: '#b44aff', neonGreen: '#00ff88',
-  neonRed: '#ff3366', neonYellow: '#ffe033', neonOrange: '#ff8800',
-  panelBg: 'rgba(10, 14, 40, 0.85)', panelBorder: 'rgba(0, 240, 255, 0.3)',
-  textMain: '#e0e8ff', textDim: '#6b7db3',
-  groundColor: '#0a1628', groundLine: 'rgba(0, 240, 255, 0.12)',
-  npcSkin: '#FFD5B8', npcHair: '#FF6B9D', npcDress: '#9B59B6', npcEyes: '#4FC3F7'
+// ===== 配色 =====
+var C = {
+  bg: '#080c1e', neonCyan: '#00f0ff', neonPurple: '#b44aff',
+  neonGreen: '#00ff88', neonRed: '#ff3366', neonYellow: '#ffe033',
+  neonOrange: '#ff8800', panelBg: 'rgba(10,14,40,0.88)',
+  panelBorder: 'rgba(0,240,255,0.3)', textMain: '#e0e8ff', textDim: '#6b7db3',
+  ground: '#0a1628', groundLine: 'rgba(0,240,255,0.12)',
+  // 方块配色 - 鲜艳醒目
+  wood: { fill: '#E8A838', stroke: '#B07818', glow: '#FFD060' },
+  brick: { fill: '#E04030', stroke: '#A01810', glow: '#FF6050' },
+  steel: { fill: '#8899AA', stroke: '#556677', glow: '#AACCDD' },
+  ice: { fill: '#60C8F0', stroke: '#3090C0', glow: '#90E0FF' },
+  rubber: { fill: '#E840A0', stroke: '#A82070', glow: '#FF70C0' },
+  tnt: { fill: '#FF5020', stroke: '#CC3000', glow: '#FF8040' }
 };
 
-// ==================== 游戏配置 ====================
-var CONFIG = {
-  gravity: 0.5, ropeLength: 150, magnetRadius: 80,
-  magnetPower: 0.8, craneSpeed: 5, damping: 0.99,
-  bounceDamping: 0.5, friction: 0.8
-};
+var CONFIG = { gravity: 0.5, ropeLength: 150, magnetRadius: 80, magnetPower: 0.8, craneSpeed: 5, damping: 0.99, bounceDamping: 0.5, friction: 0.8 };
 
-// ==================== 全局状态 ====================
-var gameState = {
+var gs = {
   score: 0, timeLeft: 60, gameActive: false, gamePaused: false,
-  currentLevel: 1, targetScore: 500, stars: 0,
-  currentScene: 'menu', screenShake: 0, screenShakeX: 0, screenShakeY: 0,
-  comboCount: 0, comboTimer: 0, flashAlpha: 0, magnetPulse: 0,
-  // NPC对话
-  npcDialogue: '', npcDialogueTimer: 0, npcDialogueQueue: [],
-  npcMood: 'normal', // normal, happy, sad, excited, thinking
-  tutorialStep: 0
+  currentLevel: 1, targetScore: 500, stars: 0, currentScene: 'menu',
+  shake: 0, shakeX: 0, shakeY: 0, combo: 0, comboTimer: 0,
+  flash: 0, pulse: 0, npcText: '', npcTimer: 0, npcQueue: []
 };
 
-var canvas, ctx, physics, crane, buildingGenerator, audioManager;
-var buildings = [], particles = [], floatingTexts = [];
-var gameTimer = null, loopRunning = false, frameCount = 0, lastTime = 0;
-var uiButtons = []; // 统一按钮注册表，渲染时写入，触摸时读取
+var canvas, ctx, physics, crane, bg, audio;
+var buildings = [], particles = [], floats = [], collapseQueue = [];
+var gameTimer = null, running = false, frame = 0, lastT = 0;
+var uiButtons = [];
+var touch = { sx: 0, sy: 0, lx: 0, ly: 0, drag: false, dist: 0, st: 0, moved: false };
 
-// 触摸状态
-var touch = { startX: 0, startY: 0, lastX: 0, lastY: 0, isDragging: false, dragDist: 0, startTime: 0, moved: false };
-
-// ==================== 屏幕适配 ====================
-var SA = {
-  w: 375, h: 667, pr: 1, sf: 1,
-  safeTop: 44, safeBottom: 0, safeLeft: 0, safeRight: 0, statusH: 44,
+// ===== 屏幕适配 =====
+var S = {
+  w: 375, h: 667, pr: 1, sf: 1, st: 44, sb: 0,
   init: function() {
-    try {
-      var info = wx.getSystemInfoSync();
-      this.w = info.windowWidth || info.screenWidth || 375;
-      this.h = info.windowHeight || info.screenHeight || 667;
-      this.pr = info.pixelRatio || 1;
-      this.sf = this.w / 375;
-      this.statusH = info.statusBarHeight || 44;
-      if (info.safeArea) {
-        this.safeTop = info.safeArea.top || this.statusH;
-        this.safeBottom = this.h - (info.safeArea.bottom || this.h);
-      } else {
-        this.safeTop = Math.max(this.statusH, 44);
-        var m = (info.model || '').toLowerCase();
-        if (m.indexOf('iphone') !== -1 && this.h >= 812) { this.safeTop = 44; this.safeBottom = 34; }
-      }
-    } catch(e) { this.safeTop = 44; }
+    try { var i = wx.getSystemInfoSync(); this.w=i.windowWidth||375; this.h=i.windowHeight||667; this.pr=i.pixelRatio||1; this.sf=this.w/375; this.st=i.statusBarHeight||44;
+      if(i.safeArea){this.st=Math.max(this.st,i.safeArea.top||this.st);this.sb=this.h-(i.safeArea.bottom||this.h);}else{this.st=Math.max(this.st,44);if((i.model||'').indexOf('iphone')!==-1&&this.h>=812)this.sb=34;}
+    } catch(e){this.st=44;}
   },
-  sx: function(x) { return x * this.sf; },
-  sy: function(y) { return y * this.sf; },
-  s: function(v) { return v * this.sf; },
-  safeY: function(y) { return this.safeTop + y * this.sf; }
+  sx: function(x){return x*this.sf}, sy: function(y){return y*this.sf}, s: function(v){return v*this.sf}, safY: function(y){return this.st+y*this.sf}
 };
 
-// ==================== 工具函数 ====================
-function darkenColor(c, f) {
-  if (!c || typeof c !== 'string') return '#000000'; f = f || 0.7;
-  var r, g, b;
-  if (c.indexOf('#') === 0) { var h = c.substring(1); if(h.length===3) h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2]; r=parseInt(h.substring(0,2),16); g=parseInt(h.substring(2,4),16); b=parseInt(h.substring(4,6),16); }
-  else if (c.indexOf('rgb') === 0) { var m = c.match(/(\d+)/g); if(m&&m.length>=3){r=+m[0];g=+m[1];b=+m[2];}else return '#000000'; }
-  else return '#000000';
-  r=Math.max(0,Math.min(255,Math.floor(r*f))); g=Math.max(0,Math.min(255,Math.floor(g*f))); b=Math.max(0,Math.min(255,Math.floor(b*f)));
-  return '#'+((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1);
-}
+// ===== 工具 =====
+function hex2rgba(h,a){if(!h||h[0]!=='#')return'rgba(0,0,0,'+a+')';var s=h.substring(1);if(s.length===3)s=s[0]+s[0]+s[1]+s[1]+s[2]+s[2];return'rgba('+parseInt(s.substring(0,2),16)+','+parseInt(s.substring(2,4),16)+','+parseInt(s.substring(4,6),16)+','+a+')';}
+function grad(ctx,x0,y0,x1,y1){try{if(x0===x1&&y0===y1)x1++;return ctx.createLinearGradient(x0,y0,x1,y1);}catch(e){return null;}}
+function rr(ctx,x,y,w,h,r){r=Math.min(r,w/2,h/2);ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.arcTo(x+w,y,x+w,y+r,r);ctx.lineTo(x+w,y+h-r);ctx.arcTo(x+w,y+h,x+w-r,y+h,r);ctx.lineTo(x+r,y+h);ctx.arcTo(x,y+h,x,y+h-r,r);ctx.lineTo(x,y+r);ctx.arcTo(x,y,x+r,y,r);ctx.closePath();}
+function regBtn(x,y,w,h,fn){uiButtons.push({x:x,y:y,w:w,h:h,fn:fn});}
+function findBtn(px,py){for(var i=0;i<uiButtons.length;i++){var b=uiButtons[i];if(px>=b.x&&px<=b.x+b.w&&py>=b.y&&py<=b.y+b.h)return b;}return null;}
 
-function hexToRgba(hex, a) {
-  if(!hex||hex.indexOf('#')!==0) return 'rgba(0,0,0,'+a+')';
-  var h=hex.substring(1); if(h.length===3) h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
-  return 'rgba('+parseInt(h.substring(0,2),16)+','+parseInt(h.substring(2,4),16)+','+parseInt(h.substring(4,6),16)+','+a+')';
-}
-
-function safeGrad(ctx, x0, y0, x1, y1) {
-  try { if(x0===x1&&y0===y1) x1=x0+1; if(typeof ctx.createLinearGradient==='function') return ctx.createLinearGradient(x0,y0,x1,y1); } catch(e){}
-  return null;
-}
-
-function drawRR(ctx, x, y, w, h, r) {
-  r=Math.min(r,w/2,h/2); ctx.beginPath(); ctx.moveTo(x+r,y);
-  ctx.lineTo(x+w-r,y); ctx.arcTo(x+w,y,x+w,y+r,r);
-  ctx.lineTo(x+w,y+h-r); ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
-  ctx.lineTo(x+r,y+h); ctx.arcTo(x,y+h,x,y+h-r,r);
-  ctx.lineTo(x,y+r); ctx.arcTo(x,y,x+r,y,r); ctx.closePath();
-}
-
-// ==================== NPC系统 ====================
+// ===== NPC =====
 var NPC = {
-  name: '小磁',
-  dialogues: {
-    welcome: ['欢迎来到磁吸拆迁队！我是小磁~', '让我教你如何使用磁力起重机吧！'],
-    grab: ['点击方块就能用磁铁抓住它哦~', '靠近建筑点击试试看！'],
-    swing: ['滑动屏幕让起重机左右移动~', '抓着方块晃动，甩出去砸建筑！'],
-    release: ['松手就能把方块抛出去啦！', '利用摆锤的惯性甩得更远哦~'],
-    destroy: ['哇，砸得好！继续加油！', '破坏得越狠，得分越高哦~'],
-    combo: ['连击！太厉害了！', '连续破坏有额外加分哦~'],
-    tnt: ['小心TNT方块，会爆炸的！', '利用爆炸可以连锁破坏~'],
-    lowtime: ['时间不多了，加油啊！', '快快快，最后冲刺！'],
-    win: ['太棒了，通关啦！', '你真是拆迁天才！'],
-    lose: ['没关系，再来一次吧~', '下次一定能通过的！'],
-    idle: ['点击建筑上的方块试试~', '别发呆啦，快动手！', '磁力就在你指尖~'],
-    tutorial_step1: ['第一步：点击一个方块，磁铁会自动抓住它'],
-    tutorial_step2: ['第二步：左右滑动移动起重机，甩动方块'],
-    tutorial_step3: ['第三步：松手释放方块，砸向建筑！'],
-    back_menu: ['随时可以回来找我哦~', '想我了就点主菜单~']
+  d: {
+    welcome:['欢迎！我是小磁~','点方块抓取，甩出去砸建筑！'],
+    grab:['抓住啦！甩一甩~','左右滑动蓄力！'],
+    swing:['晃动起来！','找准角度释放！'],
+    hit:['砸中了！继续！','漂亮！'],
+    combo:['连击！太强了！','继续连击！'],
+    miss:['没砸中，再来！','换个角度试试~'],
+    lowtime:['时间不多了！','快冲！'],
+    win:['通关啦！厉害！','你真棒！'],
+    lose:['没关系再来~','下次一定行！'],
+    idle:['试试抓一个方块~','点击建筑试试！'],
+    step1:['第一步：点击一个方块抓取'],
+    step2:['第二步：左右滑动甩动方块'],
+    step3:['第三步：再次点击释放方块砸向建筑！']
   },
-
-  say: function(category, idx) {
-    var list = this.dialogues[category];
-    if (!list || list.length === 0) return '';
-    return list[idx !== undefined ? idx % list.length : Math.floor(Math.random() * list.length)];
-  },
-
-  queueDialogue: function(category) {
-    var list = this.dialogues[category];
-    if (!list) return;
-    for (var i = 0; i < list.length; i++) {
-      gameState.npcDialogueQueue.push(list[i]);
-    }
-  },
-
-  showDialogue: function(text, duration) {
-    gameState.npcDialogue = text;
-    gameState.npcDialogueTimer = duration || 180; // 3秒@60fps
-  }
+  say: function(k){var l=this.d[k];return l?l[Math.floor(Math.random()*l.length)]:'';},
+  show: function(t,dur){gs.npcText=t;gs.npcTimer=dur||150;},
+  queue: function(k){var l=this.d[k];if(l)for(var i=0;i<l.length;i++)gs.npcQueue.push(l[i]);}
 };
+function procNPC(){if(gs.npcTimer>0)gs.npcTimer--;if(gs.npcTimer<=0&&gs.npcQueue.length>0)NPC.show(gs.npcQueue.shift(),150);}
 
-// ==================== 初始化 ====================
+// ===== 初始化 =====
 function init() {
-  console.log('磁吸拆迁队 V2.1 初始化...');
   try {
-    SA.init();
-    canvas = wx.createCanvas();
-    ctx = canvas.getContext('2d');
-    var info = wx.getSystemInfoSync();
-    canvas.width = info.windowWidth || info.screenWidth || 375;
-    canvas.height = info.windowHeight || info.screenHeight || 667;
+    S.init(); canvas=wx.createCanvas(); ctx=canvas.getContext('2d');
+    var info=wx.getSystemInfoSync(); canvas.width=info.windowWidth||375; canvas.height=info.windowHeight||667;
+    physics=new PhysicsSystem(CONFIG); crane=new CraneController(canvas,CONFIG);
+    bg=new BuildingGenerator(canvas,CONFIG); audio=new AudioManager();
+    crane.setPhysicsSystem(physics); audio.init();
 
-    physics = new PhysicsSystem(CONFIG);
-    crane = new CraneController(canvas, CONFIG);
-    buildingGenerator = new BuildingGenerator(canvas, CONFIG);
-    audioManager = new AudioManager();
-    crane.setPhysicsSystem(physics);
-    audioManager.init();
-
-    // 修正起重机位置和绳长
-    crane.crane.y = SA.safeTop + SA.s(5);
+    // 起重机位置 - 顶部居中，绳长适中
+    crane.crane.y = S.st + S.s(5);
     crane.crane.x = canvas.width / 2;
-    // 绳长：画面35%左右，磁铁悬浮在建筑上方
-    crane.pendulum.ropeLength = Math.floor(canvas.height * 0.32);
-    crane.magnet.x = crane.crane.x;
+    crane.pendulum.ropeLength = Math.floor(S.h * 0.25);
     crane.magnet.y = crane.crane.y + crane.crane.height + crane.pendulum.ropeLength;
-    // 吸附范围覆盖到地面建筑
-    crane.magnet.attractRadius = canvas.height * 0.5;
+    crane.magnet.x = crane.crane.x;
+    crane.magnet.attractRadius = S.h * 0.6; // 足够大的吸附范围
 
-    gameState.currentScene = 'menu';
-    NPC.queueDialogue('welcome');
-    processDialogueQueue();
-
-    bindTouchEvents();
-    loopRunning = true;
-    lastTime = Date.now();
-    gameLoop();
-    console.log('初始化完成 画布:' + canvas.width + 'x' + canvas.height);
-  } catch(err) { console.error('初始化失败:', err); }
+    gs.currentScene='menu'; NPC.queue('welcome'); procNPC();
+    bindTouch(); running=true; lastT=Date.now(); gameLoop();
+  } catch(e){console.error('init fail:',e);}
 }
 
-function nextFrame(cb) {
-  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(cb);
-  else if (canvas && typeof canvas.requestAnimationFrame === 'function') canvas.requestAnimationFrame(cb);
-  else setTimeout(cb, 16);
-}
+function nf(cb){if(typeof requestAnimationFrame==='function')requestAnimationFrame(cb);else setTimeout(cb,16);}
 
-// ==================== 对话队列处理 ====================
-function processDialogueQueue() {
-  if (gameState.npcDialogueTimer > 0) return;
-  if (gameState.npcDialogueQueue.length > 0) {
-    NPC.showDialogue(gameState.npcDialogueQueue.shift(), 180);
-  }
-}
-
-// ==================== 游戏循环 ====================
+// ===== 游戏循环 =====
 function gameLoop() {
-  if (!loopRunning) return;
-  var now = Date.now();
-  lastTime = now;
-  frameCount++;
-
-  if (gameState.currentScene === 'game' && gameState.gameActive && !gameState.gamePaused) {
-    update();
-  }
-
-  // 屏幕震动衰减
-  if (gameState.screenShake > 0) {
-    gameState.screenShake *= 0.9;
-    gameState.screenShakeX = (Math.random()-0.5) * gameState.screenShake;
-    gameState.screenShakeY = (Math.random()-0.5) * gameState.screenShake;
-    if (gameState.screenShake < 0.5) gameState.screenShake = 0;
-  }
-
-  updateParticles();
-  updateFloatingTexts();
-  gameState.magnetPulse = (gameState.magnetPulse + 0.05) % (Math.PI * 2);
-  if (gameState.flashAlpha > 0) gameState.flashAlpha *= 0.85;
-  if (gameState.comboTimer > 0) { gameState.comboTimer--; if (gameState.comboTimer <= 0) gameState.comboCount = 0; }
-  if (gameState.npcDialogueTimer > 0) gameState.npcDialogueTimer--;
-  processDialogueQueue();
-
-  // 空闲提示
-  if (gameState.currentScene === 'game' && gameState.gameActive && !gameState.gamePaused && frameCount % 600 === 0) {
-    NPC.showDialogue(NPC.say('idle'), 150);
-  }
-
-  render();
-  nextFrame(gameLoop);
+  if(!running) return; frame++; lastT=Date.now();
+  if(gs.currentScene==='game'&&gs.gameActive&&!gs.gamePaused) update();
+  // 震动衰减
+  if(gs.shake>0){gs.shake*=0.88;gs.shakeX=(Math.random()-.5)*gs.shake;gs.shakeY=(Math.random()-.5)*gs.shake;if(gs.shake<0.5)gs.shake=0;}
+  updParticles(); updFloats(); procCollapse();
+  gs.pulse=(gs.pulse+.05)%(Math.PI*2);
+  if(gs.flash>0)gs.flash*=.85;
+  if(gs.comboTimer>0){gs.comboTimer--;if(gs.comboTimer<=0)gs.combo=0;}
+  procNPC();
+  if(gs.currentScene==='game'&&gs.gameActive&&!gs.gamePaused&&frame%480===0)NPC.show(NPC.say('idle'),120);
+  render(); nf(gameLoop);
 }
 
+// ===== 核心：每帧更新 =====
 function update() {
   crane.update();
-  buildingGenerator.update(physics);
-  checkMagnetCollision();
+  bg.update(physics);
+
+  // 检测飞行中的方块撞击建筑
+  checkFlyingHits();
+
+  // 级联：悬空方块下落
+  checkFloatingBlocks();
+
   checkGameEnd();
 }
 
-// ==================== 触摸控制 ====================
-function bindTouchEvents() {
-  wx.onTouchStart(function(e) {
-    if (!e || !e.touches || e.touches.length === 0) return;
-    var t = e.touches[0];
-    touch.startX = t.clientX; touch.startY = t.clientY;
-    touch.lastX = t.clientX; touch.lastY = t.clientY;
-    touch.isDragging = true; touch.dragDist = 0;
-    touch.startTime = Date.now(); touch.moved = false;
-  });
+// ===== 飞行方块撞击检测（核心得分逻辑）=====
+function checkFlyingHits() {
+  for(var i=0;i<buildings.length;i++){
+    var b=buildings[i];
+    if(b.isDestroyed||b.isGrabbed) continue;
+    // 只有速度足够大的方块才算"飞行中"
+    var spd=Math.sqrt(b.velocityX*b.velocityX+b.velocityY*b.velocityY);
+    if(spd<2) continue;
 
-  wx.onTouchMove(function(e) {
-    if (!e || !e.touches || e.touches.length === 0) return;
-    var t = e.touches[0];
-    var dx = t.clientX - touch.lastX;
-    touch.dragDist += Math.abs(dx);
-    if (touch.dragDist > 10) touch.moved = true;
+    // 检测与其他静止方块的碰撞
+    for(var j=0;j<buildings.length;j++){
+      if(i===j) continue;
+      var t=buildings[j];
+      if(t.isDestroyed||t.isGrabbed) continue;
+      var tSpd=Math.sqrt(t.velocityX*t.velocityX+t.velocityY*t.velocityY);
+      if(tSpd>2) continue; // 两个都在飞，跳过
 
-    if (gameState.currentScene === 'game' && gameState.gameActive && !gameState.gamePaused) {
-      // 拖动控制起重机移动
-      if (Math.abs(dx) > 2) {
-        crane.move(dx > 0 ? 1 : -1);
-        // 抓着东西时晃动增加角速度
-        if (crane.magnet.isGrabbing) {
-          crane.pendulum.angularVelocity += dx * 0.003;
+      // AABB碰撞
+      if(b.x<t.x+t.width && b.x+b.width>t.x && b.y<t.y+t.height && b.y+b.height>t.y){
+        // 撞击！
+        var impactForce = spd * b.mass * 8;
+        var dmg = impactForce / t.mass * 0.5;
+        t.health -= dmg;
+
+        // 撞击效果
+        var cx=t.x+t.width/2, cy=t.y+t.height/2;
+        gs.shake=Math.min(15,impactForce*0.2);
+        audio.playSound(SoundNames.CRASH);
+        spawnSparks(cx,cy,t.color||C.neonOrange,8);
+
+        if(t.health<=0){
+          t.health=0; t.isDestroyed=true;
+          var pts=t.score||10;
+          gs.combo++; gs.comboTimer=90;
+          if(gs.combo>1) pts=Math.floor(pts*(1+gs.combo*0.15));
+          gs.score+=pts;
+          gs.flash=0.12;
+          spawnDebris(cx,cy,t.color||C.neonOrange,12);
+          spawnSparks(cx,cy,C.neonYellow,10);
+          addFloat(cx,cy,'+'+pts,gs.combo>1?C.neonYellow:C.neonGreen);
+          audio.playSound(SoundNames.DESTROY);
+          NPC.show(NPC.say(gs.combo>2?'combo':'hit'),60);
+
+          if(t.explosive){gs.shake=25;gs.flash=0.4;spawnDebris(cx,cy,C.neonRed,20);spawnSparks(cx,cy,C.neonYellow,15);
+            // 爆炸波及
+            for(var k=0;k<buildings.length;k++){var bk=buildings[k];if(bk.isDestroyed||bk===t)continue;
+              var dx2=(bk.x+bk.width/2)-cx,dy2=(bk.y+bk.height/2)-cy;
+              if(Math.sqrt(dx2*dx2+dy2*dy2)<120){bk.health-=40;if(bk.health<=0){bk.health=0;bk.isDestroyed=true;gs.score+=bk.score||10;spawnDebris(bk.x+bk.width/2,bk.y+bk.height/2,bk.color||C.neonRed,8);}}
+            }
+          }
+
+          // 加入倒塌队列
+          addCollapse(t);
         }
-      }
-    }
-    touch.lastX = t.clientX; touch.lastY = t.clientY;
-  });
 
-  wx.onTouchEnd(function(e) {
-    var x = touch.lastX, y = touch.lastY;
-    var elapsed = Date.now() - touch.startTime;
-    var isTap = !touch.moved || elapsed < 250;
-
-    // 优先查找注册按钮
-    var btn = findBtn(x, y);
-    if (btn) {
-      audioManager.playSound(SoundNames.BUTTON);
-      btn.action();
-      touch.isDragging = false; touch.moved = false;
-      return;
-    }
-
-    // 游戏场景的特殊触摸（抓取/释放方块）
-    if (gameState.currentScene === 'game') {
-      handleGameTouch(x, y, isTap);
-    }
-    touch.isDragging = false; touch.moved = false;
-  });
-}
-
-// 主菜单触摸已由按钮注册表处理
-
-// ==================== 游戏触摸（核心修复） ====================
-function handleGameTouch(x, y, isTap) {
-  // 返回菜单和暂停按钮已由按钮注册表处理
-  if (gameState.gamePaused || !gameState.gameActive) return;
-
-  if (isTap) {
-    if (crane.isGrabbing()) {
-      // ===== 释放方块 =====
-      var block = crane.releaseMagnet();
-      if (block) {
-        audioManager.playSound(SoundNames.RELEASE);
-        spawnParticles(block.x + block.width/2, block.y + block.height/2, THEME.neonCyan, 8);
-        // 根据摆锤角度给额外水平速度
-        var throwForce = crane.pendulum.angularVelocity * 80;
-        block.velocityX += throwForce;
-        block.velocityY = -8;
-        NPC.showDialogue(NPC.say('release'), 100);
-        gameState.tutorialStep = Math.max(gameState.tutorialStep, 3);
-      }
-    } else {
-      // ===== 抓取方块：找触摸点最近的方块 =====
-      var best = null, bestDist = crane.magnet.attractRadius * 2;
-      for (var i = 0; i < buildings.length; i++) {
-        var b = buildings[i];
-        if (b.isDestroyed || b.isGrabbed) continue;
-        var bx = b.x + b.width/2;
-        var by = b.y + b.height/2;
-        var d = Math.sqrt((x-bx)*(x-bx) + (y-by)*(y-by));
-        if (d < bestDist) { bestDist = d; best = b; }
-      }
-      if (best) {
-        crane.magnet.isActive = true;
-        crane.magnet.isGrabbing = true;
-        crane.magnet.grabbedBlock = best;
-        best.isGrabbed = true;
-        // 方块飞向磁铁位置（而非磁铁移到方块）
-        best.x = crane.magnet.x - best.width/2;
-        best.y = crane.magnet.y + crane.magnet.radius;
-        // 起重机移到方块所在列
-        crane.crane.x = crane.magnet.x;
-        crane.pendulum.angle = 0;
-        crane.pendulum.angularVelocity = 0;
-        audioManager.playSound(SoundNames.GRAB);
-        spawnParticles(crane.magnet.x, crane.magnet.y, THEME.neonPurple, 6);
-        NPC.showDialogue(NPC.say('grab'), 100);
-        gameState.tutorialStep = Math.max(gameState.tutorialStep, 1);
-      } else {
-        // 没找到方块，提示
-        NPC.showDialogue('点击建筑上的方块来抓取哦~', 120);
+        // 反弹
+        b.velocityX *= -0.3;
+        b.velocityY *= -0.3;
+        break;
       }
     }
   }
 }
 
-// ==================== 游戏结束触摸 ====================
-// 游戏结束触摸已由按钮注册表处理
+// ===== 悬空检测（级联倒塌）=====
+function checkFloatingBlocks() {
+  var groundY = canvas.height - S.s(50);
+  for(var i=0;i<buildings.length;i++){
+    var b=buildings[i];
+    if(b.isDestroyed||b.isGrabbed) continue;
+    if(b.velocityY>1) continue; // 已经在动了
 
-// 关卡选择/返回触摸已由按钮注册表处理
-
-// ==================== 加载关卡 ====================
-function loadLevel(level) {
-  clearGameTimer();
-  buildings = buildingGenerator.generateLevel(level);
-  gameState.targetScore = buildingGenerator.getTargetScore(level);
-  gameState.timeLeft = buildingGenerator.getTimeLimit(level);
-  gameState.score = 0; gameState.gameActive = true; gameState.gamePaused = false;
-  gameState.currentScene = 'game';
-  gameState.comboCount = 0; gameState.comboTimer = 0;
-  particles = []; floatingTexts = []; gameState.tutorialStep = 0;
-
-  // 重置起重机
-  crane.crane.x = canvas.width / 2;
-  crane.pendulum.ropeLength = Math.floor(canvas.height * 0.32);
-  crane.magnet.x = crane.crane.x;
-  crane.magnet.y = crane.crane.y + crane.crane.height + crane.pendulum.ropeLength;
-  crane.magnet.attractRadius = canvas.height * 0.5;
-  crane.magnet.isActive = false;
-  crane.magnet.isGrabbing = false;
-  crane.magnet.grabbedBlock = null;
-  crane.pendulum.angle = 0;
-  crane.pendulum.angularVelocity = 0;
-
-  startTimer();
-  // NPC引导
-  NPC.queueDialogue('tutorial_step1');
-  processDialogueQueue();
-}
-
-function clearGameTimer() { if(gameTimer){clearInterval(gameTimer);gameTimer=null;} }
-
-function startTimer() {
-  clearGameTimer();
-  gameTimer = setInterval(function() {
-    if (!gameState.gameActive || gameState.gamePaused) return;
-    gameState.timeLeft--;
-    if (gameState.timeLeft <= 10 && gameState.timeLeft > 0) {
-      try{wx.vibrateShort();}catch(e){}
-      audioManager.playSound(SoundNames.WARNING);
-      if (gameState.timeLeft <= 5) NPC.showDialogue(NPC.say('lowtime'), 90);
-    }
-    if (gameState.timeLeft <= 0) { gameState.timeLeft = 0; endGame(false); }
-  }, 1000);
-}
-
-function togglePause() {
-  gameState.gamePaused = !gameState.gamePaused;
-  audioManager.playSound(SoundNames.BUTTON);
-}
-
-// ==================== 碰撞检测 ====================
-function checkMagnetCollision() {
-  if (!crane.isGrabbing()) return;
-  var mp = crane.getMagnetPosition();
-  buildings.forEach(function(block) {
-    if (block.isDestroyed || block.isGrabbed) return;
-    var bx = block.x+block.width/2, by = block.y+block.height/2;
-    var dx = bx-mp.x, dy = by-mp.y;
-    var dist = Math.sqrt(dx*dx+dy*dy);
-    var speed = Math.sqrt(block.velocityX*block.velocityX + block.velocityY*block.velocityY);
-    if (dist < 100 && speed > 2) {
-      var impactForce = speed * block.mass * 10;
-      var result = physics.calculateDamage(block, impactForce);
-      if (result.damage > 0) {
-        var dr = buildingGenerator.damageBlock(block, result.damage);
-        audioManager.playSound(SoundNames.CRASH);
-        gameState.screenShake = Math.min(12, impactForce * 0.3);
-        if (dr.destroyed) {
-          var pts = dr.score;
-          gameState.comboCount++; gameState.comboTimer = 60;
-          if (gameState.comboCount > 1) pts = Math.floor(pts * (1 + gameState.comboCount * 0.2));
-          gameState.score += pts;
-          spawnParticles(bx, by, block.color || THEME.neonRed, 15);
-          spawnDebris(bx, by, block.color || THEME.neonOrange, 8);
-          addFloatingText(bx, by, '+'+pts, gameState.comboCount > 1 ? THEME.neonYellow : THEME.neonGreen);
-          gameState.flashAlpha = 0.15;
-          audioManager.playSound(SoundNames.DESTROY);
-          NPC.showDialogue(NPC.say(gameState.comboCount > 2 ? 'combo' : 'destroy'), 80);
-          if (block.explosive) {
-            gameState.screenShake = 20; gameState.flashAlpha = 0.4;
-            spawnParticles(bx, by, THEME.neonRed, 25);
-            NPC.showDialogue(NPC.say('tnt'), 100);
-          }
+    // 检查下方有没有支撑
+    var supported = (b.y + b.height >= groundY - 2); // 在地面上
+    if(!supported){
+      for(var j=0;j<buildings.length;j++){
+        if(i===j||buildings[j].isDestroyed||buildings[j].isGrabbed) continue;
+        // b的底部是否在j的顶部上？
+        if(b.x+b.width>buildings[j].x+2 && b.x<buildings[j].x+buildings[j].width-2){
+          if(Math.abs((b.y+b.height)-buildings[j].y)<3){supported=true;break;}
         }
       }
     }
+    if(!supported){
+      // 没有支撑，开始下落
+      b.velocityY = 1;
+    }
+  }
+}
+
+// ===== 倒塌动画 =====
+function addCollapse(block){
+  // 已在checkFloatingBlocks中通过失去支撑实现级联
+  // 这里添加额外的破碎效果
+  for(var i=0;i<buildings.length;i++){
+    var b=buildings[i];
+    if(b.isDestroyed) continue;
+    var dx=(b.x+b.width/2)-(block.x+block.width/2);
+    var dy=(b.y+b.height/2)-(block.y+block.height/2);
+    if(Math.sqrt(dx*dx+dy*dy)<100 && !b.isGrabbed){
+      b.velocityX += dx * 0.02;
+      b.velocityY += dy * 0.02 - 0.5;
+    }
+  }
+}
+
+// ===== 触摸 =====
+function bindTouch(){
+  wx.onTouchStart(function(e){
+    if(!e||!e.touches||!e.touches.length) return;
+    var t=e.touches[0]; touch.sx=t.clientX;touch.sy=t.clientY;touch.lx=t.clientX;touch.ly=t.clientY;
+    touch.drag=true;touch.dist=0;touch.st=Date.now();touch.moved=false;
+  });
+  wx.onTouchMove(function(e){
+    if(!e||!e.touches||!e.touches.length) return;
+    var t=e.touches[0],dx=t.clientX-touch.lx;
+    touch.dist+=Math.abs(dx);if(touch.dist>8)touch.moved=true;
+    if(gs.currentScene==='game'&&gs.gameActive&&!gs.gamePaused&&Math.abs(dx)>2){
+      crane.move(dx>0?1:-1);
+      if(crane.magnet.isGrabbing) crane.pendulum.angularVelocity+=dx*0.004;
+    }
+    touch.lx=t.clientX;touch.ly=t.clientY;
+  });
+  wx.onTouchEnd(function(e){
+    var x=touch.lx,y=touch.ly,el=Date.now()-touch.st;
+    var isTap=!touch.moved||el<250;
+    // 按钮优先
+    var btn=findBtn(x,y);
+    if(btn){audio.playSound(SoundNames.BUTTON);btn.fn();touch.drag=false;touch.moved=false;return;}
+    if(gs.currentScene==='game'&&gs.gameActive) handleGame(x,y,isTap);
+    touch.drag=false;touch.moved=false;
   });
 }
 
-// ==================== 粒子系统 ====================
-function spawnParticles(x,y,color,count) {
-  for(var i=0;i<count;i++){var a=Math.random()*Math.PI*2,s=1+Math.random()*4;
-    particles.push({x:x,y:y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-1,life:30+Math.random()*20,maxLife:50,color:color,size:2+Math.random()*4,type:'spark'});}
-}
-function spawnDebris(x,y,color,count) {
-  for(var i=0;i<count;i++){var a=Math.random()*Math.PI*2,s=2+Math.random()*5;
-    particles.push({x:x,y:y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-3,life:40+Math.random()*30,maxLife:70,color:color,size:4+Math.random()*8,type:'debris',rotation:Math.random()*Math.PI*2,rotSpeed:(Math.random()-0.5)*0.3});}
-}
-function updateParticles() {
-  for(var i=particles.length-1;i>=0;i--){var p=particles[i];p.x+=p.vx;p.y+=p.vy;p.vy+=0.15;p.vx*=0.98;p.life--;
-    if(p.rotation!==undefined)p.rotation+=p.rotSpeed;if(p.life<=0)particles.splice(i,1);}
-}
-function addFloatingText(x,y,text,color) { floatingTexts.push({x:x,y:y,text:text,color:color,life:40,vy:-2}); }
-function updateFloatingTexts() {
-  for(var i=floatingTexts.length-1;i>=0;i--){var ft=floatingTexts[i];ft.y+=ft.vy;ft.vy*=0.96;ft.life--;if(ft.life<=0)floatingTexts.splice(i,1);}
+function handleGame(x,y,isTap){
+  if(gs.gamePaused) return;
+  if(isTap){
+    if(crane.isGrabbing()){
+      // === 释放 ===
+      var block=crane.releaseMagnet();
+      if(block){
+        // 根据摆锤角速度给抛掷力
+        var throwX=crane.pendulum.angularVelocity*100;
+        var throwY=-10;
+        block.velocityX=throwX/block.mass;
+        block.velocityY=throwY/block.mass;
+        block.isGrabbed=false;
+        audio.playSound(SoundNames.RELEASE);
+        spawnSparks(block.x+block.width/2,block.y,C.neonCyan,6);
+        NPC.show(NPC.say('swing'),60);
+      }
+    } else {
+      // === 抓取：找点击位置最近的方块 ===
+      var best=null, bestD=crane.magnet.attractRadius*1.5;
+      for(var i=0;i<buildings.length;i++){
+        var b=buildings[i];
+        if(b.isDestroyed||b.isGrabbed) continue;
+        var bx=b.x+b.width/2,by=b.y+b.height/2;
+        var d=Math.sqrt((x-bx)*(x-bx)+(y-by)*(y-by));
+        if(d<bestD){bestD=d;best=b;}
+      }
+      if(best){
+        crane.magnet.isActive=true;crane.magnet.isGrabbing=true;crane.magnet.grabbedBlock=best;
+        best.isGrabbed=true;
+        // 方块飞向磁铁
+        best.x=crane.magnet.x-best.width/2;
+        best.y=crane.magnet.y+crane.magnet.radius+4;
+        crane.crane.x=crane.magnet.x;
+        crane.pendulum.angle=0;crane.pendulum.angularVelocity=0;
+        best.velocityX=0;best.velocityY=0;
+        audio.playSound(SoundNames.GRAB);
+        spawnSparks(crane.magnet.x,crane.magnet.y,C.neonPurple,8);
+        NPC.show(NPC.say('grab'),60);
+      } else {
+        NPC.show('点击方块抓取，甩出去砸建筑！',100);
+      }
+    }
+  }
 }
 
-function checkGameEnd() { if(gameState.score>=gameState.targetScore) endGame(true); }
-function endGame(isWin) {
-  gameState.gameActive=false; clearGameTimer();
-  var pct=gameState.targetScore>0?gameState.score/gameState.targetScore:0;
-  gameState.stars=pct>=1.0?3:pct>=0.8?2:pct>=0.5?1:0;
-  if(isWin) saveToLeaderboard(gameState.currentLevel,gameState.score);
-  audioManager.playSound(isWin?SoundNames.WIN:SoundNames.LOSE);
-  gameState.currentScene='gameover';
-  NPC.showDialogue(NPC.say(isWin?'win':'lose'), 200);
+// ===== 关卡加载 =====
+function loadLevel(lv){
+  clearTimer(); buildings=bg.generateLevel(lv);
+  // 让建筑更明显：确保方块足够大
+  buildings.forEach(function(b){
+    b.width=Math.max(b.width,S.s(50));
+    b.height=Math.max(b.height,S.s(50));
+  });
+  gs.targetScore=bg.getTargetScore(lv); gs.timeLeft=bg.getTimeLimit(lv);
+  gs.score=0;gs.gameActive=true;gs.gamePaused=false;gs.currentScene='game';
+  gs.combo=0;gs.comboTimer=0;particles=[];floats=[];
+  crane.crane.x=canvas.width/2;crane.pendulum.ropeLength=Math.floor(S.h*0.25);
+  crane.magnet.x=crane.crane.x;crane.magnet.y=crane.crane.y+crane.crane.height+crane.pendulum.ropeLength;
+  crane.magnet.attractRadius=S.h*0.6;
+  crane.magnet.isActive=false;crane.magnet.isGrabbing=false;crane.magnet.grabbedBlock=null;
+  crane.pendulum.angle=0;crane.pendulum.angularVelocity=0;
+  startTimer(); NPC.queue('step1');procNPC();
 }
-function saveToLeaderboard(level,score) {
-  try{var lb=[];var d=wx.getStorageSync('leaderboard');if(d)lb=JSON.parse(d);
-    lb.push({level:level,score:score,time:Date.now()});lb.sort(function(a,b){return b.score-a.score;});
-    if(lb.length>20)lb=lb.slice(0,20);wx.setStorageSync('leaderboard',JSON.stringify(lb));}catch(e){}
-}
+function clearTimer(){if(gameTimer){clearInterval(gameTimer);gameTimer=null;}}
+function startTimer(){clearTimer();gameTimer=setInterval(function(){
+  if(!gs.gameActive||gs.gamePaused)return;gs.timeLeft--;
+  if(gs.timeLeft<=10&&gs.timeLeft>0){try{wx.vibrateShort();}catch(e){}audio.playSound(SoundNames.WARNING);if(gs.timeLeft<=5)NPC.show(NPC.say('lowtime'),60);}
+  if(gs.timeLeft<=0){gs.timeLeft=0;endGame(false);}
+},1000);}
 
-// ==================== 渲染 ====================
-function render() {
-  uiButtons = []; // 每帧重置按钮注册表
+function checkGameEnd(){if(gs.score>=gs.targetScore)endGame(true);}
+function endGame(win){
+  gs.gameActive=false;clearTimer();
+  var pct=gs.targetScore>0?gs.score/gs.targetScore:0;
+  gs.stars=pct>=1?3:pct>=.8?2:pct>=.5?1:0;
+  if(win)saveLB(gs.currentLevel,gs.score);
+  audio.playSound(win?SoundNames.WIN:SoundNames.LOSE);
+  gs.currentScene='gameover';NPC.show(NPC.say(win?'win':'lose'),200);
+}
+function saveLB(lv,sc){try{var d=[];var r=wx.getStorageSync('leaderboard');if(r)d=JSON.parse(r);d.push({level:lv,score:sc,time:Date.now()});d.sort(function(a,b){return b.score-a.score;});if(d.length>20)d=d.slice(0,20);wx.setStorageSync('leaderboard',JSON.stringify(d));}catch(e){}}
+
+// ===== 粒子 =====
+function spawnSparks(x,y,color,n){for(var i=0;i<n;i++){var a=Math.random()*Math.PI*2,s=1+Math.random()*5;particles.push({x:x,y:y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-1,life:25+Math.random()*20,ml:45,color:color,sz:2+Math.random()*3,t:'spark'});}}
+function spawnDebris(x,y,color,n){for(var i=0;i<n;i++){var a=Math.random()*Math.PI*2,s=2+Math.random()*6;particles.push({x:x,y:y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-3,life:35+Math.random()*25,ml:60,color:color,sz:4+Math.random()*8,t:'debris',rot:Math.random()*6.28,rs:(Math.random()-.5)*.3});}}
+function updParticles(){for(var i=particles.length-1;i>=0;i--){var p=particles[i];p.x+=p.vx;p.y+=p.vy;p.vy+=.15;p.vx*=.98;p.life--;if(p.rot!==undefined)p.rot+=p.rs;if(p.life<=0)particles.splice(i,1);}}
+function addFloat(x,y,t,c){floats.push({x:x,y:y,t:t,c:c,life:45,vy:-2});}
+function updFloats(){for(var i=floats.length-1;i>=0;i--){var f=floats[i];f.y+=f.vy;f.vy*=.96;f.life--;if(f.life<=0)floats.splice(i,1);}}
+function procCollapse(){}
+
+// ===== 渲染 =====
+function render(){
+  uiButtons=[];
   ctx.save();
-  if(gameState.screenShake>0) ctx.translate(gameState.screenShakeX,gameState.screenShakeY);
-  switch(gameState.currentScene) {
-    case 'menu': renderMainMenu(); break;
-    case 'game': renderGameScene(); break;
-    case 'gameover': renderGameScene(); renderGameOver(); break;
-    case 'levelselect': renderLevelSelect(); break;
-    case 'leaderboard': renderLeaderboard(); break;
-    case 'instructions': renderInstructions(); break;
+  if(gs.shake>0)ctx.translate(gs.shakeX,gs.shakeY);
+  switch(gs.currentScene){
+    case 'menu':renderMenu();break;
+    case 'game':renderGame();break;
+    case 'gameover':renderGame();renderGameOver();break;
+    case 'levelselect':renderLevelSel();break;
+    case 'leaderboard':renderLB();break;
+    case 'instructions':renderHelp();break;
   }
   ctx.restore();
 }
 
-// 注册按钮（渲染时调用）
-function regBtn(x, y, w, h, action) {
-  uiButtons.push({ x: x, y: y, w: w, h: h, action: action });
-}
-
-// 查找点击的按钮
-function findBtn(px, py) {
-  for (var i = 0; i < uiButtons.length; i++) {
-    var b = uiButtons[i];
-    if (px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) return b;
-  }
-  return null;
-}
-
-// ==================== 主菜单渲染 ====================
-function renderMainMenu() {
-  var bg = safeGrad(ctx,0,0,0,canvas.height);
-  if(bg){bg.addColorStop(0,'#020510');bg.addColorStop(0.5,'#0a1035');bg.addColorStop(1,'#050a20');ctx.fillStyle=bg;}
-  else ctx.fillStyle=THEME.bgDark;
-  ctx.fillRect(0,0,canvas.width,canvas.height);
-  drawStars(); drawSciGrid();
-
-  // NPC角色
-  drawNPC(SA.sx(30), SA.safeY(50), SA.s(80));
+// ===== 主菜单 =====
+function renderMenu(){
+  var g=grad(ctx,0,0,0,canvas.height);
+  if(g){g.addColorStop(0,'#020510');g.addColorStop(.5,'#0a1035');g.addColorStop(1,'#050a20');ctx.fillStyle=g;}else ctx.fillStyle=C.bg;
+  ctx.fillRect(0,0,canvas.width,canvas.height);drawStars();
 
   // 标题
-  ctx.save(); ctx.shadowColor=THEME.neonCyan; ctx.shadowBlur=20;
-  ctx.fillStyle=THEME.neonCyan; ctx.font='bold '+SA.s(30)+'px Arial';
-  ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText('磁吸拆迁队', canvas.width/2, SA.safeY(170));
-  ctx.shadowBlur=0; ctx.restore();
+  ctx.save();ctx.shadowColor=C.neonCyan;ctx.shadowBlur=20;ctx.fillStyle=C.neonCyan;
+  ctx.font='bold '+S.s(32)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText('磁吸拆迁队',canvas.width/2,S.safY(80));ctx.restore();
+  ctx.fillStyle=C.textDim;ctx.font=S.s(13)+'px Arial';ctx.textAlign='center';
+  ctx.fillText('MAGNETIC DEMOLITION TEAM',canvas.width/2,S.safY(115));
 
-  ctx.fillStyle=THEME.textDim; ctx.font=SA.s(12)+'px Arial'; ctx.textAlign='center';
-  ctx.fillText('MAGNETIC DEMOLITION TEAM', canvas.width/2, SA.safeY(198));
+  // NPC
+  drawNPC(S.sx(20),S.safY(140),S.s(70));
+  if(gs.npcText&&gs.npcTimer>0)drawBubble(S.sx(100),S.safY(135),S.s(240),gs.npcText);
 
-  // NPC对话气泡
-  if (gameState.npcDialogue && gameState.npcDialogueTimer > 0) {
-    drawDialogueBubble(SA.sx(120), SA.safeY(35), SA.s(220), gameState.npcDialogue);
-  }
-
-  // 按钮（渲染时注册到uiButtons，触摸时自动匹配）
-  var cx=canvas.width/2, btnW=SA.s(240), btnH=SA.s(52), startY=SA.safeY(225);
-  var labels=['开始游戏','关卡选择','排行榜','玩法说明'];
-  var colors=[THEME.neonGreen,THEME.neonCyan,THEME.neonYellow,THEME.neonPurple];
-  var actions=[
-    function(){ loadLevel(gameState.currentLevel); },
-    function(){ gameState.currentScene='levelselect'; },
-    function(){ gameState.currentScene='leaderboard'; },
-    function(){ gameState.currentScene='instructions'; }
-  ];
-  for(var i=0;i<labels.length;i++){
-    var btnY=startY+i*(btnH+SA.s(14));
-    drawSciButton(cx-btnW/2,btnY,btnW,btnH,labels[i],colors[i]);
-    regBtn(cx-btnW/2,btnY,btnW,btnH,actions[i]);
-  }
+  // 按钮
+  var cx=canvas.width/2,bw=S.s(240),bh=S.s(54),sy=S.safY(220);
+  var lb=['开始游戏','关卡选择','排行榜','玩法说明'];
+  var cl=[C.neonGreen,C.neonCyan,C.neonYellow,C.neonPurple];
+  var fn=[function(){loadLevel(gs.currentLevel);},function(){gs.currentScene='levelselect';},function(){gs.currentScene='leaderboard';},function(){gs.currentScene='instructions';}];
+  for(var i=0;i<lb.length;i++){var by=sy+i*(bh+S.s(14));drawBtn(cx-bw/2,by,bw,bh,lb[i],cl[i]);regBtn(cx-bw/2,by,bw,bh,fn[i]);}
 }
 
-// ==================== NPC角色绘制（动漫风） ====================
-function drawNPC(x, y, size) {
-  ctx.save();
-  var s = size;
-  var cx = x + s * 0.4; // 角色中心偏移
-
-  // 身体发光光环
-  var pulse = Math.sin(frameCount * 0.03) * 0.15 + 0.85;
-  ctx.strokeStyle = hexToRgba(THEME.neonPurple, 0.3 * pulse);
-  ctx.lineWidth = SA.s(2);
-  ctx.beginPath(); ctx.arc(cx, y + s * 0.5, s * 0.45, 0, Math.PI * 2); ctx.stroke();
-
-  // 头发（长粉色头发）
-  ctx.fillStyle = THEME.npcHair;
-  // 头发外轮廓
-  ctx.beginPath();
-  ctx.ellipse(cx, y + s * 0.22, s * 0.28, s * 0.28, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // 左侧长发
-  ctx.beginPath();
-  ctx.moveTo(cx - s * 0.25, y + s * 0.2);
-  ctx.quadraticCurveTo(cx - s * 0.35, y + s * 0.55, cx - s * 0.2, y + s * 0.85);
-  ctx.quadraticCurveTo(cx - s * 0.12, y + s * 0.85, cx - s * 0.15, y + s * 0.4);
-  ctx.fill();
-  // 右侧长发
-  ctx.beginPath();
-  ctx.moveTo(cx + s * 0.25, y + s * 0.2);
-  ctx.quadraticCurveTo(cx + s * 0.35, y + s * 0.55, cx + s * 0.2, y + s * 0.85);
-  ctx.quadraticCurveTo(cx + s * 0.12, y + s * 0.85, cx + s * 0.15, y + s * 0.4);
-  ctx.fill();
-
-  // 脸部
-  ctx.fillStyle = THEME.npcSkin;
-  ctx.beginPath();
-  ctx.ellipse(cx, y + s * 0.28, s * 0.2, s * 0.2, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // 刘海
-  ctx.fillStyle = THEME.npcHair;
-  ctx.beginPath();
-  ctx.moveTo(cx - s * 0.22, y + s * 0.15);
-  ctx.quadraticCurveTo(cx - s * 0.15, y + s * 0.05, cx, y + s * 0.08);
-  ctx.quadraticCurveTo(cx + s * 0.15, y + s * 0.05, cx + s * 0.22, y + s * 0.15);
-  ctx.quadraticCurveTo(cx + s * 0.18, y + s * 0.22, cx + s * 0.08, y + s * 0.2);
-  ctx.quadraticCurveTo(cx, y + s * 0.18, cx - s * 0.08, y + s * 0.2);
-  ctx.quadraticCurveTo(cx - s * 0.18, y + s * 0.22, cx - s * 0.22, y + s * 0.15);
-  ctx.fill();
-
-  // 眼睛（大动漫眼）
-  // 左眼
-  ctx.fillStyle = '#FFFFFF';
-  ctx.beginPath(); ctx.ellipse(cx - s * 0.08, y + s * 0.27, s * 0.06, s * 0.07, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = THEME.npcEyes;
-  ctx.beginPath(); ctx.ellipse(cx - s * 0.08, y + s * 0.28, s * 0.04, s * 0.05, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#000000';
-  ctx.beginPath(); ctx.ellipse(cx - s * 0.08, y + s * 0.29, s * 0.025, s * 0.03, 0, 0, Math.PI * 2); ctx.fill();
-  // 高光
-  ctx.fillStyle = '#FFFFFF';
-  ctx.beginPath(); ctx.arc(cx - s * 0.06, y + s * 0.26, s * 0.015, 0, Math.PI * 2); ctx.fill();
-
-  // 右眼
-  ctx.fillStyle = '#FFFFFF';
-  ctx.beginPath(); ctx.ellipse(cx + s * 0.08, y + s * 0.27, s * 0.06, s * 0.07, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = THEME.npcEyes;
-  ctx.beginPath(); ctx.ellipse(cx + s * 0.08, y + s * 0.28, s * 0.04, s * 0.05, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#000000';
-  ctx.beginPath(); ctx.ellipse(cx + s * 0.08, y + s * 0.29, s * 0.025, s * 0.03, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#FFFFFF';
-  ctx.beginPath(); ctx.arc(cx + s * 0.1, y + s * 0.26, s * 0.015, 0, Math.PI * 2); ctx.fill();
-
-  // 嘴巴
-  var mouthOpen = (gameState.npcDialogueTimer > 0 && frameCount % 12 < 6) ? s * 0.015 : 0;
-  ctx.strokeStyle = '#E88B8B';
-  ctx.lineWidth = SA.s(1.5);
-  ctx.beginPath();
-  ctx.arc(cx, y + s * 0.35, s * 0.04, 0.1, Math.PI - 0.1);
-  ctx.stroke();
-  if (mouthOpen > 0) {
-    ctx.fillStyle = '#D46A6A';
-    ctx.beginPath(); ctx.ellipse(cx, y + s * 0.355, s * 0.025, mouthOpen, 0, 0, Math.PI * 2); ctx.fill();
-  }
-
-  // 腮红
-  ctx.fillStyle = 'rgba(255, 150, 150, 0.25)';
-  ctx.beginPath(); ctx.ellipse(cx - s * 0.14, y + s * 0.32, s * 0.035, s * 0.02, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.ellipse(cx + s * 0.14, y + s * 0.32, s * 0.035, s * 0.02, 0, 0, Math.PI * 2); ctx.fill();
-
-  // 身体（简化 - 紫色衣服）
-  ctx.fillStyle = THEME.npcDress;
-  ctx.beginPath();
-  ctx.moveTo(cx - s * 0.12, y + s * 0.42);
-  ctx.quadraticCurveTo(cx - s * 0.2, y + s * 0.7, cx - s * 0.18, y + s * 0.95);
-  ctx.lineTo(cx + s * 0.18, y + s * 0.95);
-  ctx.quadraticCurveTo(cx + s * 0.2, y + s * 0.7, cx + s * 0.12, y + s * 0.42);
-  ctx.fill();
-  // 衣服装饰线
-  ctx.strokeStyle = hexToRgba(THEME.neonCyan, 0.5);
-  ctx.lineWidth = SA.s(1);
-  ctx.beginPath(); ctx.moveTo(cx, y + s * 0.42); ctx.lineTo(cx, y + s * 0.65); ctx.stroke();
-
-  // 名字标签
-  ctx.fillStyle = THEME.neonPurple;
-  ctx.font = 'bold ' + SA.s(11) + 'px Arial';
-  ctx.textAlign = 'center';
-  ctx.fillText('小磁', cx, y + s);
-
-  ctx.restore();
-}
-
-// ==================== NPC对话气泡 ====================
-function drawDialogueBubble(x, y, maxW, text) {
-  if (!text) return;
-  ctx.save();
-
-  var fs = SA.s(13);
-  ctx.font = fs + 'px Arial';
-
-  // 自动换行
-  var lines = [];
-  var line = '';
-  for (var i = 0; i < text.length; i++) {
-    var testLine = line + text[i];
-    if (ctx.measureText(testLine).width > maxW - SA.s(20)) {
-      lines.push(line);
-      line = text[i];
-    } else {
-      line = testLine;
-    }
-  }
-  if (line) lines.push(line);
-
-  var lineH = fs + SA.s(4);
-  var bubbleH = lines.length * lineH + SA.s(16);
-  var bubbleW = maxW;
-  var alpha = Math.min(1, gameState.npcDialogueTimer / 30);
-
-  // 气泡背景
-  ctx.fillStyle = 'rgba(20, 15, 50, ' + (0.9 * alpha) + ')';
-  drawRR(ctx, x, y, bubbleW, bubbleH, SA.s(8));
-  ctx.fill();
-  ctx.strokeStyle = hexToRgba(THEME.neonPurple, 0.6 * alpha);
-  ctx.lineWidth = SA.s(1);
-  drawRR(ctx, x, y, bubbleW, bubbleH, SA.s(8));
-  ctx.stroke();
-
-  // 小三角指向NPC
-  ctx.fillStyle = 'rgba(20, 15, 50, ' + (0.9 * alpha) + ')';
-  ctx.beginPath();
-  ctx.moveTo(x + SA.s(10), y);
-  ctx.lineTo(x, y - SA.s(8));
-  ctx.lineTo(x + SA.s(20), y);
-  ctx.fill();
-
-  // 文字
-  ctx.fillStyle = hexToRgba(THEME.textMain, alpha);
-  ctx.font = fs + 'px Arial';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  for (var li = 0; li < lines.length; li++) {
-    ctx.fillText(lines[li], x + SA.s(10), y + SA.s(8) + li * lineH);
-  }
-
-  ctx.restore();
-}
-
-// ==================== 科幻按钮 ====================
-function drawSciButton(x,y,w,h,text,color) {
-  ctx.save();
-  ctx.fillStyle=hexToRgba(color,0.08); drawRR(ctx,x,y,w,h,SA.s(6)); ctx.fill();
-  ctx.shadowColor=color; ctx.shadowBlur=8; ctx.strokeStyle=hexToRgba(color,0.6);
-  ctx.lineWidth=SA.s(1.5); drawRR(ctx,x,y,w,h,SA.s(6)); ctx.stroke(); ctx.shadowBlur=0;
-  ctx.strokeStyle=hexToRgba(color,0.8); ctx.lineWidth=SA.s(1);
-  ctx.beginPath(); ctx.moveTo(x+SA.s(10),y); ctx.lineTo(x+w-SA.s(10),y); ctx.stroke();
-  ctx.fillStyle=color; ctx.font='bold '+SA.s(17)+'px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText(text,x+w/2,y+h/2);
-  ctx.restore();
-}
-
-function drawStars() {
-  ctx.fillStyle='#ffffff';
-  for(var i=0;i<60;i++){var sx=((i*127+33)%canvas.width),sy=((i*89+17)%canvas.height),sz=((i%3)+1)*0.5;
-    ctx.globalAlpha=0.3+Math.sin(frameCount*0.02+i)*0.2; ctx.fillRect(sx,sy,sz,sz);}
-  ctx.globalAlpha=1;
-}
-
-function drawSciGrid() {
-  ctx.strokeStyle='rgba(0,240,255,0.04)'; ctx.lineWidth=1; var sp=SA.s(40);
-  for(var x=0;x<canvas.width;x+=sp){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,canvas.height);ctx.stroke();}
-  for(var y=0;y<canvas.height;y+=sp){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(canvas.width,y);ctx.stroke();}
-}
-
-// ==================== 游戏场景渲染 ====================
-function renderGameScene() {
-  var bg=safeGrad(ctx,0,0,0,canvas.height);
-  if(bg){bg.addColorStop(0,'#020510');bg.addColorStop(0.6,'#0a1035');bg.addColorStop(1,'#0d1540');ctx.fillStyle=bg;}
-  else ctx.fillStyle=THEME.bgDark;
-  ctx.fillRect(0,0,canvas.width,canvas.height);
-  drawStars(); drawSciGrid();
+// ===== 游戏场景 =====
+function renderGame(){
+  // 背景
+  var g=grad(ctx,0,0,0,canvas.height);
+  if(g){g.addColorStop(0,'#020510');g.addColorStop(.6,'#0a1035');g.addColorStop(1,'#0d1540');ctx.fillStyle=g;}else ctx.fillStyle=C.bg;
+  ctx.fillRect(0,0,canvas.width,canvas.height);drawStars();
 
   // 地面
-  var groundY=canvas.height-SA.s(50);
-  ctx.fillStyle=THEME.groundColor; ctx.fillRect(0,groundY,canvas.width,SA.s(50));
-  ctx.strokeStyle=THEME.groundLine; ctx.lineWidth=SA.s(1);
-  ctx.beginPath(); ctx.moveTo(0,groundY); ctx.lineTo(canvas.width,groundY); ctx.stroke();
-  ctx.strokeStyle='rgba(0,240,255,0.06)';
-  for(var gx=0;gx<canvas.width;gx+=SA.s(30)){ctx.beginPath();ctx.moveTo(gx,groundY);ctx.lineTo(gx,canvas.height);ctx.stroke();}
+  var gy=canvas.height-S.s(50);
+  ctx.fillStyle=C.ground;ctx.fillRect(0,gy,canvas.width,S.s(50));
+  ctx.strokeStyle=C.groundLine;ctx.lineWidth=S.s(1);ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(canvas.width,gy);ctx.stroke();
 
-  drawBuildings(); drawCrane(); drawParticles(); drawFloatingTexts();
+  // ===== 建筑（醒目！） =====
+  drawBuildings();
 
-  if(gameState.flashAlpha>0.01){ctx.fillStyle='rgba(255,255,255,'+gameState.flashAlpha+')';ctx.fillRect(0,0,canvas.width,canvas.height);}
-  drawGameUI();
-  if(gameState.gamePaused) drawPauseOverlay();
+  // 起重机+磁铁
+  drawCrane();
 
-  // 游戏中NPC小头像+对话
-  if (gameState.npcDialogue && gameState.npcDialogueTimer > 0) {
-    var npcSize = SA.s(40);
-    drawNPC(SA.sx(5), canvas.height - npcSize - SA.s(10), npcSize);
-    drawDialogueBubble(SA.sx(50), canvas.height - SA.s(60), SA.s(240), gameState.npcDialogue);
-  }
+  // 粒子+飘字
+  drawParticles();drawFloats();
+
+  // 闪光
+  if(gs.flash>.01){ctx.fillStyle='rgba(255,255,255,'+gs.flash+')';ctx.fillRect(0,0,canvas.width,canvas.height);}
+
+  // HUD
+  drawHUD();
+
+  // NPC
+  if(gs.npcText&&gs.npcTimer>0){drawNPC(S.sx(5),canvas.height-S.s(75),S.s(45));drawBubble(S.sx(55),canvas.height-S.s(65),S.s(230),gs.npcText);}
+
+  if(gs.gamePaused)drawPause();
 }
 
-// ==================== 建筑渲染 ====================
-function drawBuildings() {
-  buildings.forEach(function(block) {
-    if(block.isDestroyed) return;
-    var hp=block.health/block.maxHealth;
-    var bx=block.x,by=block.y,bw=block.width,bh=block.height;
+// ===== 建筑（醒目渲染）=====
+function drawBuildings(){
+  buildings.forEach(function(b){
+    if(b.isDestroyed)return;
+    var hp=b.health/b.maxHealth;
+    var bc=C[b.type]||C.wood;
+
     ctx.save();
+    // 发光底色 - 让建筑在暗背景上极度醒目
+    ctx.shadowColor=bc.glow;
+    ctx.shadowBlur=hp>0.5?8:15;
 
-    var bg=safeGrad(ctx,bx,by,bx,by+bh);
-    var bc=getBlockColor(block.type,hp);
-    if(bg){bg.addColorStop(0,bc.light);bg.addColorStop(1,bc.dark);ctx.fillStyle=bg;}
-    else ctx.fillStyle=block.color;
-    ctx.fillRect(bx,by,bw,bh);
+    // 方块主体
+    ctx.fillStyle=bc.fill;
+    ctx.fillRect(b.x,b.y,b.width,b.height);
 
-    ctx.strokeStyle=getBlockGlow(block.type,hp);
-    ctx.lineWidth=hp<0.5?SA.s(2):SA.s(1); ctx.strokeRect(bx,by,bw,bh);
-    if(hp<0.7) drawCracks(bx,by,bw,bh,hp);
-    drawBlockDetail(bx,by,bw,bh,block.type);
+    // 边框
+    ctx.shadowBlur=0;
+    ctx.strokeStyle=bc.stroke;
+    ctx.lineWidth=S.s(2);
+    ctx.strokeRect(b.x,b.y,b.width,b.height);
 
-    if(hp<1.0){var barW=bw*0.8,barH=SA.s(3),barX=bx+(bw-barW)/2,barY=by-SA.s(7);
-      ctx.fillStyle='rgba(255,0,0,0.5)';ctx.fillRect(barX,barY,barW,barH);
-      ctx.fillStyle=hp>0.5?THEME.neonGreen:hp>0.25?THEME.neonYellow:THEME.neonRed;
-      ctx.fillRect(barX,barY,barW*hp,barH);}
+    // 内部高光
+    ctx.fillStyle='rgba(255,255,255,0.15)';
+    ctx.fillRect(b.x+2,b.y+2,b.width-4,S.s(4));
+
+    // 类型标记
+    ctx.font='bold '+S.s(14)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillStyle='rgba(255,255,255,0.7)';
+    var label=b.type==='wood'?'木':b.type==='brick'?'砖':b.type==='steel'?'钢':b.type==='ice'?'冰':b.type==='rubber'?'胶':b.type==='tnt'?'TNT':'?';
+    ctx.fillText(label,b.x+b.width/2,b.y+b.height/2);
+
+    // 裂纹
+    if(hp<0.7){
+      ctx.strokeStyle='rgba(0,0,0,0.5)';ctx.lineWidth=S.s(1.5);
+      var cn=hp<0.3?3:1;
+      for(var ci=0;ci<cn;ci++){ctx.beginPath();ctx.moveTo(b.x+b.width*(0.3+ci*0.2),b.y);ctx.lineTo(b.x+b.width*(0.4+ci*0.15),b.y+b.height*0.5);ctx.lineTo(b.x+b.width*(0.2+ci*0.3),b.y+b.height);ctx.stroke();}
+    }
+    // 濒危闪烁
+    if(hp<0.3&&frame%20<10){ctx.fillStyle='rgba(255,50,50,0.15)';ctx.fillRect(b.x,b.y,b.width,b.height);}
+
+    // 血条
+    if(hp<1){
+      var bw2=b.width*.8,bh2=S.s(4),bx2=b.x+(b.width-bw2)/2,by2=b.y-S.s(8);
+      ctx.fillStyle='rgba(0,0,0,0.5)';ctx.fillRect(bx2,by2,bw2,bh2);
+      ctx.fillStyle=hp>.5?C.neonGreen:hp>.25?C.neonYellow:C.neonRed;
+      ctx.fillRect(bx2,by2,bw2*hp,bh2);
+    }
     ctx.restore();
   });
 }
 
-function getBlockColor(t,hp){var c={wood:{light:'#8B6914',dark:'#5C4409'},brick:{light:'#A03020',dark:'#6B1A10'},steel:{light:'#607080',dark:'#3A4550'},ice:{light:'#4FC3F7',dark:'#0288D1'},rubber:{light:'#E91E90',dark:'#AD1457'},tnt:{light:'#FF5722',dark:'#BF360C'}};var r=c[t]||c.wood;if(hp<0.5)return{light:darkenColor(r.light,0.6),dark:darkenColor(r.dark,0.6)};return r;}
-function getBlockGlow(t,hp){var g={wood:'rgba(139,105,20,0.4)',brick:'rgba(160,48,32,0.4)',steel:'rgba(0,240,255,0.3)',ice:'rgba(79,195,247,0.5)',rubber:'rgba(233,30,144,0.4)',tnt:'rgba(255,87,34,0.6)'};if(hp<0.3)return'rgba(255,50,50,0.7)';return g[t]||g.wood;}
-function drawCracks(x,y,w,h,hp){ctx.strokeStyle='rgba(0,0,0,0.6)';ctx.lineWidth=SA.s(1);var n=hp<0.3?4:2;for(var i=0;i<n;i++){ctx.beginPath();ctx.moveTo(x+w*(0.2+i*0.3),y);ctx.lineTo(x+w*(0.3+i*0.2),y+h*0.4);ctx.lineTo(x+w*(0.15+i*0.25),y+h*0.7);ctx.lineTo(x+w*(0.25+i*0.3),y+h);ctx.stroke();}if(hp<0.3&&frameCount%20<10){ctx.fillStyle='rgba(255,0,0,0.1)';ctx.fillRect(x,y,w,h);}}
-function drawBlockDetail(x,y,w,h,t){
-  if(t==='steel'){ctx.fillStyle='rgba(200,220,240,0.3)';var r=SA.s(3);ctx.beginPath();ctx.arc(x+SA.s(6),y+SA.s(6),r,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(x+w-SA.s(6),y+SA.s(6),r,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(x+SA.s(6),y+h-SA.s(6),r,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(x+w-SA.s(6),y+h-SA.s(6),r,0,Math.PI*2);ctx.fill();}
-  else if(t==='ice'){ctx.fillStyle='rgba(255,255,255,0.15)';ctx.fillRect(x+SA.s(4),y+SA.s(4),w*0.3,SA.s(2));ctx.fillRect(x+SA.s(4),y+SA.s(10),w*0.15,SA.s(2));}
-  else if(t==='tnt'){ctx.fillStyle='rgba(255,255,0,0.8)';ctx.font='bold '+SA.s(12)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('TNT',x+w/2,y+h/2);}
-  else if(t==='brick'){ctx.strokeStyle='rgba(0,0,0,0.3)';ctx.lineWidth=SA.s(0.5);ctx.beginPath();ctx.moveTo(x,y+h/3);ctx.lineTo(x+w,y+h/3);ctx.stroke();ctx.beginPath();ctx.moveTo(x,y+h*2/3);ctx.lineTo(x+w,y+h*2/3);ctx.stroke();ctx.beginPath();ctx.moveTo(x+w/2,y);ctx.lineTo(x+w/2,y+h/3);ctx.stroke();}
-  else if(t==='wood'){ctx.strokeStyle='rgba(0,0,0,0.15)';ctx.lineWidth=SA.s(0.5);for(var i=0;i<3;i++){var wy=y+h*(0.2+i*0.3);ctx.beginPath();ctx.moveTo(x+SA.s(3),wy);ctx.lineTo(x+w-SA.s(3),wy+SA.s(2));ctx.stroke();}}
-}
-
-// ==================== 起重机渲染 ====================
-function drawCrane() {
-  if(!crane) return;
-  var craneX=crane.crane.x, craneY=crane.crane.y, craneW=crane.crane.width, craneH=crane.crane.height;
+// ===== 起重机 =====
+function drawCrane(){
+  if(!crane)return;
+  var cx=crane.crane.x,cy=crane.crane.y,cw=crane.crane.width,ch=crane.crane.height;
   ctx.save();
-
-  // 轨道线
-  ctx.strokeStyle='rgba(0,240,255,0.15)'; ctx.lineWidth=SA.s(1);
-  try{if(ctx.setLineDash)ctx.setLineDash([SA.s(5),SA.s(5)]);}catch(e){}
-  ctx.beginPath(); ctx.moveTo(0,craneY+craneH); ctx.lineTo(canvas.width,craneY+craneH); ctx.stroke();
-  try{if(ctx.setLineDash)ctx.setLineDash([]);}catch(e){}
-
+  // 轨道
+  ctx.strokeStyle='rgba(0,240,255,0.1)';ctx.lineWidth=S.s(1);ctx.setLineDash&&ctx.setLineDash([5,5]);
+  ctx.beginPath();ctx.moveTo(0,cy+ch);ctx.lineTo(canvas.width,cy+ch);ctx.stroke();
+  ctx.setLineDash&&ctx.setLineDash([]);
   // 主体
-  var bg=safeGrad(ctx,craneX-craneW/2,craneY,craneX+craneW/2,craneY);
-  if(bg){bg.addColorStop(0,'#1a2744');bg.addColorStop(0.5,'#2a3b5e');bg.addColorStop(1,'#1a2744');ctx.fillStyle=bg;}
-  else ctx.fillStyle='#2a3b5e';
-  drawRR(ctx,craneX-craneW/2,craneY,craneW,craneH,SA.s(4)); ctx.fill();
-  ctx.strokeStyle=THEME.neonCyan; ctx.lineWidth=SA.s(1.5);
-  ctx.shadowColor=THEME.neonCyan; ctx.shadowBlur=6;
-  drawRR(ctx,craneX-craneW/2,craneY,craneW,craneH,SA.s(4)); ctx.stroke(); ctx.shadowBlur=0;
-
-  // 窗口
-  ctx.fillStyle=hexToRgba(THEME.neonCyan,0.3); ctx.fillRect(craneX-SA.s(12),craneY+SA.s(10),SA.s(24),SA.s(16));
-  ctx.strokeStyle=THEME.neonCyan; ctx.lineWidth=SA.s(0.5); ctx.strokeRect(craneX-SA.s(12),craneY+SA.s(10),SA.s(24),SA.s(16));
-
-  // 轮子
-  ctx.fillStyle=THEME.neonCyan;
-  ctx.beginPath(); ctx.arc(craneX-SA.s(18),craneY+craneH+SA.s(2),SA.s(6),0,Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc(craneX+SA.s(18),craneY+craneH+SA.s(2),SA.s(6),0,Math.PI*2); ctx.fill();
-
+  ctx.fillStyle='#2a3b5e';rr(ctx,cx-cw/2,cy,cw,ch,S.s(4));ctx.fill();
+  ctx.strokeStyle=C.neonCyan;ctx.lineWidth=S.s(1.5);ctx.shadowColor=C.neonCyan;ctx.shadowBlur=6;
+  rr(ctx,cx-cw/2,cy,cw,ch,S.s(4));ctx.stroke();ctx.shadowBlur=0;
+  // 窗
+  ctx.fillStyle=hex2rgba(C.neonCyan,.3);ctx.fillRect(cx-S.s(10),cy+S.s(10),S.s(20),S.s(14));
   // 绳索
-  var pivotX=craneX, pivotY=craneY+craneH;
-  var magnetX=crane.magnet.x, magnetY=crane.magnet.y;
-  ctx.strokeStyle='rgba(0,240,255,0.6)'; ctx.lineWidth=SA.s(2);
-  ctx.beginPath(); ctx.moveTo(pivotX,pivotY); ctx.lineTo(magnetX,magnetY); ctx.stroke();
-  ctx.strokeStyle=hexToRgba(THEME.neonCyan,0.15); ctx.lineWidth=SA.s(6);
-  ctx.beginPath(); ctx.moveTo(pivotX,pivotY); ctx.lineTo(magnetX,magnetY); ctx.stroke();
-
+  var px=cx,py=cy+ch,mx=crane.magnet.x,my=crane.magnet.y;
+  ctx.strokeStyle='rgba(0,240,255,0.5)';ctx.lineWidth=S.s(2);
+  ctx.beginPath();ctx.moveTo(px,py);ctx.lineTo(mx,my);ctx.stroke();
   // 磁铁
-  drawMagnet(magnetX, magnetY);
+  drawMag(mx,my);
   ctx.restore();
 }
 
-// ==================== 磁铁渲染 ====================
-function drawMagnet(mx,my) {
-  var isActive=crane.magnet.isActive, isGrabbing=crane.isGrabbing();
-  var radius=crane.magnet.radius, attractR=crane.magnet.attractRadius;
-  var pulse=Math.sin(gameState.magnetPulse)*0.3+0.7;
+function drawMag(mx,my){
+  var grabbing=crane.isGrabbing(),r=crane.magnet.radius,ar=crane.magnet.attractRadius;
+  var p=Math.sin(gs.pulse)*.3+.7;
   ctx.save();
-
-  // 磁力范围
-  if(isActive||isGrabbing){
-    for(var ring=3;ring>=1;ring--){var rr=attractR*(ring/3)*pulse;
-      ctx.strokeStyle=hexToRgba(THEME.neonCyan,0.06*(4-ring));ctx.lineWidth=SA.s(1);
-      ctx.beginPath();ctx.arc(mx,my,rr,0,Math.PI*2);ctx.stroke();}
-    ctx.strokeStyle=hexToRgba(THEME.neonPurple,0.2);ctx.lineWidth=SA.s(1);
-    for(var li=0;li<8;li++){var la=(li/8)*Math.PI*2+frameCount*0.02;
-      ctx.beginPath();ctx.moveTo(mx+Math.cos(la)*(radius+SA.s(5)),my+Math.sin(la)*(radius+SA.s(5)));
-      ctx.lineTo(mx+Math.cos(la)*attractR*0.7,my+Math.sin(la)*attractR*0.7);ctx.stroke();}
+  // 范围指示
+  if(crane.magnet.isActive||grabbing){
+    for(var i=3;i>=1;i--){ctx.strokeStyle=hex2rgba(C.neonCyan,.04*(4-i));ctx.lineWidth=S.s(1);ctx.beginPath();ctx.arc(mx,my,ar*(i/3)*p,0,Math.PI*2);ctx.stroke();}
   }
-
   // U形磁铁
-  ctx.shadowColor=isGrabbing?THEME.neonGreen:THEME.neonCyan; ctx.shadowBlur=20*pulse;
-  ctx.lineWidth=SA.s(5); ctx.strokeStyle=isGrabbing?THEME.neonGreen:THEME.neonCyan;
-  ctx.beginPath(); ctx.arc(mx,my,radius,0,Math.PI); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(mx-radius,my); ctx.lineTo(mx-radius,my-SA.s(8)); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(mx+radius,my); ctx.lineTo(mx+radius,my-SA.s(8)); ctx.stroke();
-
-  // 发光核心
-  var coreColor=isGrabbing?THEME.neonGreen:THEME.neonCyan;
-  var cg=safeGrad(ctx,mx-radius,my,mx+radius,my);
-  if(cg){cg.addColorStop(0,hexToRgba(coreColor,0.1));cg.addColorStop(0.5,hexToRgba(coreColor,0.4*pulse));cg.addColorStop(1,hexToRgba(coreColor,0.1));ctx.fillStyle=cg;}
-  else ctx.fillStyle=hexToRgba(coreColor,0.3);
-  ctx.beginPath(); ctx.arc(mx,my,radius*0.8,0,Math.PI*2); ctx.fill(); ctx.shadowBlur=0;
-
+  ctx.shadowColor=grabbing?C.neonGreen:C.neonCyan;ctx.shadowBlur=20*p;
+  ctx.lineWidth=S.s(5);ctx.strokeStyle=grabbing?C.neonGreen:C.neonCyan;
+  ctx.beginPath();ctx.arc(mx,my,r,0,Math.PI);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(mx-r,my);ctx.lineTo(mx-r,my-S.s(8));ctx.stroke();
+  ctx.beginPath();ctx.moveTo(mx+r,my);ctx.lineTo(mx+r,my-S.s(8));ctx.stroke();
+  // 核心
+  ctx.beginPath();ctx.arc(mx,my,r*.7,0,Math.PI*2);ctx.fillStyle=hex2rgba(grabbing?C.neonGreen:C.neonCyan,.3*p);ctx.fill();
+  ctx.shadowBlur=0;
   // 电弧
-  if(isGrabbing&&crane.magnet.grabbedBlock){
-    var block=crane.magnet.grabbedBlock, bx=block.x+block.width/2, by=block.y;
-    ctx.strokeStyle=THEME.neonYellow; ctx.lineWidth=SA.s(1.5);
-    ctx.shadowColor=THEME.neonYellow; ctx.shadowBlur=8;
-    for(var si=-1;si<=1;si++){ctx.beginPath();ctx.moveTo(mx+si*SA.s(8),my+radius);
-      var midX=mx+si*SA.s(8)+(Math.random()-0.5)*SA.s(15),midY=(my+by)/2;
-      ctx.quadraticCurveTo(midX,midY,bx+si*SA.s(10),by);ctx.stroke();}
+  if(grabbing&&crane.magnet.grabbedBlock){
+    var blk=crane.magnet.grabbedBlock;
+    ctx.strokeStyle=C.neonYellow;ctx.lineWidth=S.s(1.5);ctx.shadowColor=C.neonYellow;ctx.shadowBlur=8;
+    for(var si=-1;si<=1;si++){ctx.beginPath();ctx.moveTo(mx+si*S.s(6),my+r);
+      ctx.quadraticCurveTo(mx+si*S.s(6)+(Math.random()-.5)*S.s(12),(my+blk.y)/2,blk.x+blk.width/2+si*S.s(8),blk.y);ctx.stroke();}
     ctx.shadowBlur=0;
   }
   ctx.restore();
 }
 
-function drawParticles(){particles.forEach(function(p){var a=p.life/p.maxLife;ctx.save();if(p.type==='debris'){ctx.translate(p.x,p.y);ctx.rotate(p.rotation||0);ctx.fillStyle=hexToRgba(p.color,a);ctx.fillRect(-p.size/2,-p.size/2,p.size,p.size);}else{ctx.fillStyle=hexToRgba(p.color,a);ctx.shadowColor=p.color;ctx.shadowBlur=6;ctx.beginPath();ctx.arc(p.x,p.y,p.size*a,0,Math.PI*2);ctx.fill();}ctx.restore();});}
+function drawParticles(){particles.forEach(function(p){var a=p.life/p.ml;ctx.save();if(p.t==='debris'){ctx.translate(p.x,p.y);ctx.rotate(p.rot||0);ctx.fillStyle=hex2rgba(p.color,a);ctx.fillRect(-p.sz/2,-p.sz/2,p.sz,p.sz);}else{ctx.fillStyle=hex2rgba(p.color,a);ctx.shadowColor=p.color;ctx.shadowBlur=4;ctx.beginPath();ctx.arc(p.x,p.y,p.sz*a,0,Math.PI*2);ctx.fill();}ctx.restore();});}
+function drawFloats(){floats.forEach(function(f){var a=f.life/45;ctx.save();ctx.globalAlpha=a;ctx.fillStyle=f.c;ctx.font='bold '+S.s(22)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.shadowColor=f.c;ctx.shadowBlur=10;ctx.fillText(f.t,f.x,f.y);if(gs.combo>1&&f.t[0]==='+'){ctx.font=S.s(13)+'px Arial';ctx.fillText(gs.combo+'x',f.x,f.y-S.s(16));}ctx.restore();});}
 
-function drawFloatingTexts(){floatingTexts.forEach(function(ft){var a=ft.life/40;ctx.save();ctx.globalAlpha=a;ctx.fillStyle=ft.color;ctx.font='bold '+SA.s(20)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.shadowColor=ft.color;ctx.shadowBlur=10;ctx.fillText(ft.text,ft.x,ft.y);if(gameState.comboCount>1&&ft.text.indexOf('+')===0){ctx.font=SA.s(12)+'px Arial';ctx.fillText(gameState.comboCount+'x COMBO',ft.x,ft.y-SA.s(18));}ctx.restore();});}
-
-// ==================== 游戏UI ====================
-function drawGameUI() {
-  var topBarH=SA.s(36), topBarY=SA.safeTop;
-  ctx.fillStyle=THEME.panelBg; ctx.fillRect(0,topBarY,canvas.width,topBarH);
-  ctx.strokeStyle=THEME.panelBorder; ctx.lineWidth=SA.s(1);
-  ctx.beginPath(); ctx.moveTo(0,topBarY+topBarH); ctx.lineTo(canvas.width,topBarY+topBarH); ctx.stroke();
-
-  var fs=SA.s(14), midY=topBarY+topBarH/2;
-  ctx.font='bold '+fs+'px Arial'; ctx.textBaseline='middle';
-  ctx.fillStyle=THEME.neonGreen; ctx.textAlign='left'; ctx.fillText('分数 '+gameState.score,SA.sx(75),midY);
-  var tc=gameState.timeLeft<=10?THEME.neonRed:THEME.neonCyan;
-  ctx.fillStyle=tc; ctx.textAlign='center'; ctx.fillText(gameState.timeLeft+'s',canvas.width/2,midY);
-  ctx.fillStyle=THEME.neonYellow; ctx.textAlign='right'; ctx.fillText('L'+gameState.currentLevel+' 目标'+gameState.targetScore,canvas.width-SA.sx(70),midY);
-  if(gameState.timeLeft<=5&&frameCount%30<15){ctx.fillStyle='rgba(255,50,50,0.15)';ctx.fillRect(0,0,canvas.width,canvas.height);}
-
-  // 返回主菜单按钮（左上角）- 渲染+注册
-  var backX=SA.sx(5), backY2=topBarY+SA.s(3), backW=SA.s(60), backH=SA.s(30);
-  ctx.fillStyle='rgba(0,240,255,0.1)'; drawRR(ctx,backX,backY2,backW,backH,SA.s(4)); ctx.fill();
-  ctx.strokeStyle=hexToRgba(THEME.neonCyan,0.4); ctx.lineWidth=SA.s(0.5); drawRR(ctx,backX,backY2,backW,backH,SA.s(4)); ctx.stroke();
-  ctx.fillStyle=THEME.neonCyan; ctx.font=SA.s(12)+'px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText('菜单',backX+backW/2,backY2+backH/2);
-  regBtn(backX, backY2, backW, backH, function(){ gameState.currentScene='menu'; clearGameTimer(); gameState.gameActive=false; });
-
-  // 暂停按钮（右上角）- 渲染+注册
-  var pauseX=canvas.width-SA.sx(60), pauseY=topBarY+SA.s(3), pauseW=SA.s(50), pauseH=SA.s(30);
-  ctx.fillStyle='rgba(0,240,255,0.1)'; drawRR(ctx,pauseX,pauseY,pauseW,pauseH,SA.s(4)); ctx.fill();
-  ctx.strokeStyle=hexToRgba(THEME.neonCyan,0.4); ctx.lineWidth=SA.s(0.5); drawRR(ctx,pauseX,pauseY,pauseW,pauseH,SA.s(4)); ctx.stroke();
-  ctx.fillStyle=THEME.neonCyan; ctx.font=SA.s(12)+'px Arial'; ctx.textAlign='center';
-  ctx.fillText(gameState.gamePaused?'继续':'暂停',pauseX+pauseW/2,pauseY+pauseH/2);
-  regBtn(pauseX, pauseY, pauseW, pauseH, function(){ togglePause(); });
-
-  // 连击
-  if(gameState.comboCount>1&&gameState.comboTimer>0){ctx.save();ctx.fillStyle=THEME.neonYellow;ctx.font='bold '+SA.s(16)+'px Arial';ctx.textAlign='center';ctx.shadowColor=THEME.neonYellow;ctx.shadowBlur=10;ctx.fillText(gameState.comboCount+'x COMBO!',canvas.width/2,topBarY+topBarH+SA.s(25));ctx.restore();}
-
+// ===== HUD =====
+function drawHUD(){
+  var th=S.s(38),ty=S.st;
+  ctx.fillStyle=C.panelBg;ctx.fillRect(0,ty,canvas.width,th);
+  ctx.strokeStyle=C.panelBorder;ctx.lineWidth=S.s(1);ctx.beginPath();ctx.moveTo(0,ty+th);ctx.lineTo(canvas.width,ty+th);ctx.stroke();
+  var fs=S.s(15),my=ty+th/2;
+  ctx.font='bold '+fs+'px Arial';ctx.textBaseline='middle';
+  ctx.fillStyle=C.neonGreen;ctx.textAlign='left';ctx.fillText('分数:'+gs.score,S.sx(70),my);
+  ctx.fillStyle=gs.timeLeft<=10?C.neonRed:C.neonCyan;ctx.textAlign='center';ctx.fillText(gs.timeLeft+'s',canvas.width/2,my);
+  ctx.fillStyle=C.neonYellow;ctx.textAlign='right';ctx.fillText('L'+gs.currentLevel+' 目标'+gs.targetScore,canvas.width-S.sx(70),my);
+  // 菜单按钮
+  var bx=S.sx(5),by2=ty+S.s(3),bw=S.s(58),bh=S.s(32);
+  ctx.fillStyle='rgba(0,240,255,0.1)';rr(ctx,bx,by2,bw,bh,S.s(4));ctx.fill();
+  ctx.strokeStyle=hex2rgba(C.neonCyan,.4);ctx.lineWidth=S.s(.5);rr(ctx,bx,by2,bw,bh,S.s(4));ctx.stroke();
+  ctx.fillStyle=C.neonCyan;ctx.font=S.s(12)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('菜单',bx+bw/2,by2+bh/2);
+  regBtn(bx,by2,bw,bh,function(){gs.currentScene='menu';clearTimer();gs.gameActive=false;});
+  // 暂停按钮
+  var px=canvas.width-S.sx(58),py=ty+S.s(3),pw=S.s(50),ph=S.s(32);
+  ctx.fillStyle='rgba(0,240,255,0.1)';rr(ctx,px,py,pw,ph,S.s(4));ctx.fill();
+  ctx.strokeStyle=hex2rgba(C.neonCyan,.4);ctx.lineWidth=S.s(.5);rr(ctx,px,py,pw,ph,S.s(4));ctx.stroke();
+  ctx.fillStyle=C.neonCyan;ctx.font=S.s(12)+'px Arial';ctx.textAlign='center';ctx.fillText(gs.gamePaused?'继续':'暂停',px+pw/2,py+ph/2);
+  regBtn(px,py,pw,ph,function(){gs.gamePaused=!gs.gamePaused;});
   // 操作提示
-  if(gameState.gameActive&&!gameState.gamePaused){
-    var el=buildingGenerator.getTimeLimit(gameState.currentLevel)-gameState.timeLeft;
-    if(el<4){ctx.fillStyle=hexToRgba(THEME.neonCyan,Math.max(0,1-el/4));ctx.font=SA.s(13)+'px Arial';ctx.textAlign='center';ctx.fillText('滑动移动 · 点击抓取/释放',canvas.width/2,canvas.height-SA.s(20));}
-  }
+  if(gs.gameActive&&!gs.gamePaused){var el=bg.getTimeLimit(gs.currentLevel)-gs.timeLeft;
+    if(el<4){ctx.fillStyle=hex2rgba(C.neonCyan,Math.max(0,1-el/4));ctx.font=S.s(14)+'px Arial';ctx.textAlign='center';ctx.fillText('点击方块抓取 → 滑动甩动 → 再点释放',canvas.width/2,canvas.height-S.s(20));}}
 }
 
-function drawPauseOverlay(){
-  ctx.fillStyle='rgba(5,10,30,0.85)';ctx.fillRect(0,0,canvas.width,canvas.height);
-  ctx.save();ctx.shadowColor=THEME.neonCyan;ctx.shadowBlur=15;ctx.fillStyle=THEME.neonCyan;
-  ctx.font='bold '+SA.s(32)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.fillText('游戏暂停',canvas.width/2,canvas.height/2);ctx.restore();
-  ctx.fillStyle=THEME.textDim;ctx.font=SA.s(14)+'px Arial';ctx.fillText('点击暂停按钮继续',canvas.width/2,canvas.height/2+SA.s(40));
-}
+function drawPause(){ctx.fillStyle='rgba(5,10,30,0.85)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.save();ctx.shadowColor=C.neonCyan;ctx.shadowBlur=15;ctx.fillStyle=C.neonCyan;ctx.font='bold '+S.s(32)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('游戏暂停',canvas.width/2,canvas.height/2);ctx.restore();}
 
-// ==================== 游戏结束 ====================
+// ===== 结算 =====
 function renderGameOver(){
   ctx.fillStyle='rgba(5,10,30,0.9)';ctx.fillRect(0,0,canvas.width,canvas.height);
-  var cx=canvas.width/2,boxW=SA.s(300),boxH=SA.s(300),boxX=(canvas.width-boxW)/2,boxY=(canvas.height-boxH)/2;
-  ctx.fillStyle=THEME.panelBg;ctx.strokeStyle=THEME.panelBorder;ctx.lineWidth=SA.s(1.5);
-  drawRR(ctx,boxX,boxY,boxW,boxH,SA.s(12));ctx.fill();drawRR(ctx,boxX,boxY,boxW,boxH,SA.s(12));ctx.stroke();
-  var pct=gameState.targetScore>0?gameState.score/gameState.targetScore:0,isWin=pct>=1.0;
-  ctx.save();ctx.shadowColor=isWin?THEME.neonGreen:THEME.neonRed;ctx.shadowBlur=15;
-  ctx.fillStyle=isWin?THEME.neonGreen:THEME.neonRed;ctx.font='bold '+SA.s(26)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.fillText(isWin?'关卡通过!':'时间到!',cx,boxY+SA.s(45));ctx.restore();
-  drawSciStars(cx,boxY+SA.s(95),gameState.stars);
-  ctx.fillStyle=THEME.textMain;ctx.font=SA.s(16)+'px Arial';ctx.textAlign='center';
-  ctx.fillText('得分: '+gameState.score,cx,boxY+SA.s(140));
-  ctx.fillStyle=THEME.textDim;ctx.fillText('目标: '+gameState.targetScore,cx,boxY+SA.s(168));
-  var btnW=SA.s(130),btnH=SA.s(52),btnY=boxY+boxH-SA.s(85);
-  drawSciButton(cx-btnW-SA.s(10),btnY,btnW,btnH,'重玩',THEME.neonRed);
-  regBtn(cx-btnW-SA.s(10),btnY,btnW,btnH,function(){ loadLevel(gameState.currentLevel); });
-  drawSciButton(cx+SA.s(10),btnY,btnW,btnH,'下一关',THEME.neonGreen);
-  regBtn(cx+SA.s(10),btnY,btnW,btnH,function(){ gameState.currentLevel++; loadLevel(gameState.currentLevel); });
-  drawSciButton(cx-btnW/2,btnY+btnH+SA.s(12),btnW,btnH,'返回主菜单',THEME.textDim);
-  regBtn(cx-btnW/2,btnY+btnH+SA.s(12),btnW,btnH,function(){ gameState.currentScene='menu'; });
-
-  // NPC在结算页
-  drawNPC(boxX + SA.s(5), boxY + boxH - SA.s(65), SA.s(50));
+  var cx=canvas.width/2,bw=S.s(300),bh=S.s(300),bx=(canvas.width-bw)/2,by=(canvas.height-bh)/2;
+  ctx.fillStyle=C.panelBg;ctx.strokeStyle=C.panelBorder;ctx.lineWidth=S.s(1.5);rr(ctx,bx,by,bw,bh,S.s(12));ctx.fill();rr(ctx,bx,by,bw,bh,S.s(12));ctx.stroke();
+  var win=gs.score>=gs.targetScore;
+  ctx.save();ctx.shadowColor=win?C.neonGreen:C.neonRed;ctx.shadowBlur=15;ctx.fillStyle=win?C.neonGreen:C.neonRed;
+  ctx.font='bold '+S.s(26)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(win?'关卡通过!':'时间到!',cx,by+S.s(45));ctx.restore();
+  ctx.fillStyle=C.textMain;ctx.font=S.s(18)+'px Arial';ctx.textAlign='center';ctx.fillText('得分: '+gs.score,cx,by+S.s(110));ctx.fillStyle=C.textDim;ctx.fillText('目标: '+gs.targetScore,cx,by+S.s(140));
+  var bw2=S.s(130),bh2=S.s(52),by2=by+bh-S.s(85);
+  drawBtn(cx-bw2-S.s(10),by2,bw2,bh2,'重玩',C.neonRed);regBtn(cx-bw2-S.s(10),by2,bw2,bh2,function(){loadLevel(gs.currentLevel);});
+  drawBtn(cx+S.s(10),by2,bw2,bh2,'下一关',C.neonGreen);regBtn(cx+S.s(10),by2,bw2,bh2,function(){gs.currentLevel++;loadLevel(gs.currentLevel);});
+  drawBtn(cx-bw2/2,by2+bh2+S.s(12),bw2,bh2,'返回主菜单',C.textDim);regBtn(cx-bw2/2,by2+bh2+S.s(12),bw2,bh2,function(){gs.currentScene='menu';});
+  drawNPC(bx+S.s(5),by+bh-S.s(60),S.s(50));
 }
 
-function drawSciStars(cx,cy,count){var size=SA.s(22),gap=SA.s(8),tw=3*size*2+2*gap,sx=cx-tw/2;
-  for(var i=0;i<3;i++){var x=sx+i*(size*2+gap),f=i<count;ctx.save();if(f){ctx.shadowColor=THEME.neonYellow;ctx.shadowBlur=10;}
-    ctx.strokeStyle=f?THEME.neonYellow:THEME.textDim;ctx.lineWidth=SA.s(1.5);drawStar5(ctx,x,cy,size);ctx.stroke();
-    if(f){ctx.fillStyle=hexToRgba(THEME.neonYellow,0.3);drawStar5(ctx,x,cy,size);ctx.fill();}ctx.restore();}}
-function drawStar5(ctx,cx,cy,size){ctx.beginPath();for(var i=0;i<10;i++){var r=i%2===0?size:size*0.45,a=(i*Math.PI/5)-Math.PI/2;
-  var px=cx+Math.cos(a)*r,py=cy+Math.sin(a)*r;if(i===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);}ctx.closePath();}
-
-// ==================== 关卡选择/排行榜/说明 ====================
-function renderLevelSelect(){
-  ctx.fillStyle=THEME.bgDark;ctx.fillRect(0,0,canvas.width,canvas.height);drawStars();
-  ctx.save();ctx.shadowColor=THEME.neonCyan;ctx.shadowBlur=12;ctx.fillStyle=THEME.neonCyan;
-  ctx.font='bold '+SA.s(26)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.fillText('关卡选择',canvas.width/2,SA.safeY(55));ctx.restore();
-  var btnW=SA.s(280),btnH=SA.s(48),startX=(canvas.width-btnW)/2,startY=SA.safeY(95);
-  for(var i=0;i<5;i++){var btnY=startY+i*(btnH+SA.s(10));drawSciButton(startX,btnY,btnW,btnH,'关卡 '+(i+1),THEME.neonCyan); (function(lv){regBtn(startX,btnY,btnW,btnH,function(){gameState.currentLevel=lv;loadLevel(lv);});})(i+1);}
-  drawSciButton((canvas.width-btnW)/2,canvas.height-SA.sy(80),btnW,SA.s(50),'返回主菜单',THEME.neonRed);
-  regBtn((canvas.width-btnW)/2,canvas.height-SA.sy(80),btnW,SA.s(50),function(){gameState.currentScene='menu';});
+// ===== 关卡选择/排行榜/说明 =====
+function renderLevelSel(){
+  ctx.fillStyle=C.bg;ctx.fillRect(0,0,canvas.width,canvas.height);drawStars();
+  ctx.save();ctx.shadowColor=C.neonCyan;ctx.shadowBlur=12;ctx.fillStyle=C.neonCyan;ctx.font='bold '+S.s(26)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('关卡选择',canvas.width/2,S.safY(55));ctx.restore();
+  var bw=S.s(280),bh=S.s(48),sx=(canvas.width-bw)/2,sy=S.safY(95);
+  for(var i=0;i<5;i++){var by=sy+i*(bh+S.s(10));drawBtn(sx,by,bw,bh,'关卡 '+(i+1),C.neonCyan);(function(lv){regBtn(sx,by,bw,bh,function(){gs.currentLevel=lv;loadLevel(lv);});})(i+1);}
+  var backY=canvas.height-S.sy(80);drawBtn((canvas.width-bw)/2,backY,bw,S.s(50),'返回主菜单',C.neonRed);regBtn((canvas.width-bw)/2,backY,bw,S.s(50),function(){gs.currentScene='menu';});
 }
-
-function renderLeaderboard(){
-  ctx.fillStyle=THEME.bgDark;ctx.fillRect(0,0,canvas.width,canvas.height);drawStars();
-  ctx.save();ctx.shadowColor=THEME.neonYellow;ctx.shadowBlur=12;ctx.fillStyle=THEME.neonYellow;
-  ctx.font='bold '+SA.s(26)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.fillText('排行榜',canvas.width/2,SA.safeY(55));ctx.restore();
+function renderLB(){
+  ctx.fillStyle=C.bg;ctx.fillRect(0,0,canvas.width,canvas.height);drawStars();
+  ctx.save();ctx.shadowColor=C.neonYellow;ctx.shadowBlur=12;ctx.fillStyle=C.neonYellow;ctx.font='bold '+S.s(26)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('排行榜',canvas.width/2,S.safY(55));ctx.restore();
   var lb=[];try{var d=wx.getStorageSync('leaderboard');if(d)lb=JSON.parse(d);}catch(e){}
-  if(lb.length===0){ctx.fillStyle=THEME.textDim;ctx.font=SA.s(15)+'px Arial';ctx.fillText('暂无记录',canvas.width/2,canvas.height/2);}
-  else{var medals=[THEME.neonYellow,'#C0C0C0','#CD7F32'];for(var i=0;i<Math.min(lb.length,10);i++){var ey=SA.safeY(100)+i*SA.s(36);ctx.fillStyle=i<3?medals[i]:THEME.textDim;ctx.font='bold '+SA.s(16)+'px Arial';ctx.textAlign='left';ctx.fillText((i+1)+'. L'+(lb[i].level||'-')+'  '+(lb[i].score||0)+'分',SA.sx(40),ey);}}
-  drawSciButton((canvas.width-SA.s(280))/2,canvas.height-SA.sy(80),SA.s(280),SA.s(50),'返回主菜单',THEME.neonRed);
-  regBtn((canvas.width-SA.s(280))/2,canvas.height-SA.sy(80),SA.s(280),SA.s(50),function(){gameState.currentScene='menu';});
+  if(!lb.length){ctx.fillStyle=C.textDim;ctx.font=S.s(15)+'px Arial';ctx.fillText('暂无记录',canvas.width/2,canvas.height/2);}
+  else{var ms=[C.neonYellow,'#C0C0C0','#CD7F32'];for(var i=0;i<Math.min(lb.length,10);i++){ctx.fillStyle=i<3?ms[i]:C.textDim;ctx.font='bold '+S.s(16)+'px Arial';ctx.textAlign='left';ctx.fillText((i+1)+'. L'+(lb[i].level||'-')+' '+(lb[i].score||0)+'分',S.sx(40),S.safY(100)+i*S.s(36));}}
+  var bw=S.s(280),backY=canvas.height-S.sy(80);drawBtn((canvas.width-bw)/2,backY,bw,S.s(50),'返回主菜单',C.neonRed);regBtn((canvas.width-bw)/2,backY,bw,S.s(50),function(){gs.currentScene='menu';});
+}
+function renderHelp(){
+  ctx.fillStyle=C.bg;ctx.fillRect(0,0,canvas.width,canvas.height);drawStars();
+  ctx.save();ctx.shadowColor=C.neonPurple;ctx.shadowBlur=12;ctx.fillStyle=C.neonPurple;ctx.font='bold '+S.s(26)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('玩法说明',canvas.width/2,S.safY(55));ctx.restore();
+  var t=['▸ 点击方块 → 磁铁抓住它','▸ 左右滑动 → 甩动方块','▸ 再次点击 → 释放砸向建筑','▸ 砸中建筑 → 得分！','▸ 连续破坏 → 连击加分','▸ TNT方块 → 爆炸范围伤害','▸ 摧毁支撑 → 建筑倒塌','▸ 达到目标分数 → 过关'];
+  ctx.fillStyle=C.textMain;ctx.font=S.s(15)+'px Arial';ctx.textAlign='left';
+  for(var i=0;i<t.length;i++)ctx.fillText(t[i],S.sx(30),S.safY(100)+i*S.s(34));
+  drawNPC(canvas.width-S.s(80),S.safY(280),S.s(70));
+  var bw=S.s(280),backY=canvas.height-S.sy(80);drawBtn((canvas.width-bw)/2,backY,bw,S.s(50),'返回主菜单',C.neonRed);regBtn((canvas.width-bw)/2,backY,bw,S.s(50),function(){gs.currentScene='menu';});
 }
 
-function renderInstructions(){
-  ctx.fillStyle=THEME.bgDark;ctx.fillRect(0,0,canvas.width,canvas.height);drawStars();
-  ctx.save();ctx.shadowColor=THEME.neonPurple;ctx.shadowBlur=12;ctx.fillStyle=THEME.neonPurple;
-  ctx.font='bold '+SA.s(26)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.fillText('玩法说明',canvas.width/2,SA.safeY(55));ctx.restore();
-  var tips=['▸ 点击方块 — 磁铁抓住它','▸ 左右滑动 — 移动起重机','▸ 再次点击 — 释放方块','▸ 利用摆锤惯性砸向建筑','▸ 达到目标分数即可过关','▸ TNT方块会爆炸','▸ 每10关解锁新机制','▸ 每100关换主题'];
-  ctx.fillStyle=THEME.textMain;ctx.font=SA.s(14)+'px Arial';ctx.textAlign='left';
-  for(var i=0;i<tips.length;i++){ctx.fillText(tips[i],SA.sx(30),SA.safeY(100)+i*SA.s(32));}
+// ===== 通用绘制 =====
+function drawBtn(x,y,w,h,t,c){ctx.save();ctx.fillStyle=hex2rgba(c,.08);rr(ctx,x,y,w,h,S.s(6));ctx.fill();ctx.shadowColor=c;ctx.shadowBlur=6;ctx.strokeStyle=hex2rgba(c,.6);ctx.lineWidth=S.s(1.5);rr(ctx,x,y,w,h,S.s(6));ctx.stroke();ctx.shadowBlur=0;ctx.fillStyle=c;ctx.font='bold '+S.s(17)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(t,x+w/2,y+h/2);ctx.restore();}
+function drawStars(){ctx.fillStyle='#fff';for(var i=0;i<50;i++){var x=(i*127+33)%canvas.width,y=(i*89+17)%canvas.height;ctx.globalAlpha=.3+Math.sin(frame*.02+i)*.2;ctx.fillRect(x,y,1,1);}ctx.globalAlpha=1;}
 
-  // NPC在说明页
-  drawNPC(canvas.width - SA.s(80), SA.safeY(300), SA.s(70));
-
-  drawSciButton((canvas.width-SA.s(280))/2,canvas.height-SA.sy(80),SA.s(280),SA.s(50),'返回主菜单',THEME.neonRed);
-  regBtn((canvas.width-SA.s(280))/2,canvas.height-SA.sy(80),SA.s(280),SA.s(50),function(){gameState.currentScene='menu';});
+function drawNPC(x,y,sz){
+  ctx.save();var cx=x+sz*.4,s=sz;
+  // 头发
+  ctx.fillStyle='#FF6B9D';ctx.beginPath();ctx.ellipse(cx,y+s*.22,s*.28,s*.28,0,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.moveTo(cx-s*.25,y+s*.2);ctx.quadraticCurveTo(cx-s*.35,y+s*.55,cx-s*.2,y+s*.85);ctx.quadraticCurveTo(cx-s*.12,y+s*.85,cx-s*.15,y+s*.4);ctx.fill();
+  ctx.beginPath();ctx.moveTo(cx+s*.25,y+s*.2);ctx.quadraticCurveTo(cx+s*.35,y+s*.55,cx+s*.2,y+s*.85);ctx.quadraticCurveTo(cx+s*.12,y+s*.85,cx+s*.15,y+s*.4);ctx.fill();
+  // 脸
+  ctx.fillStyle='#FFD5B8';ctx.beginPath();ctx.ellipse(cx,y+s*.28,s*.2,s*.2,0,0,Math.PI*2);ctx.fill();
+  // 刘海
+  ctx.fillStyle='#FF6B9D';ctx.beginPath();ctx.moveTo(cx-s*.22,y+s*.15);ctx.quadraticCurveTo(cx,y+s*.05,cx+s*.22,y+s*.15);ctx.quadraticCurveTo(cx+s*.18,y+s*.22,cx-s*.18,y+s*.22);ctx.fill();
+  // 大眼
+  ctx.fillStyle='#fff';ctx.beginPath();ctx.ellipse(cx-s*.08,y+s*.27,s*.06,s*.07,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#4FC3F7';ctx.beginPath();ctx.ellipse(cx-s*.08,y+s*.28,s*.04,s*.05,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#000';ctx.beginPath();ctx.ellipse(cx-s*.08,y+s*.29,s*.02,s*.03,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(cx-s*.06,y+s*.26,s*.012,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#fff';ctx.beginPath();ctx.ellipse(cx+s*.08,y+s*.27,s*.06,s*.07,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#4FC3F7';ctx.beginPath();ctx.ellipse(cx+s*.08,y+s*.28,s*.04,s*.05,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#000';ctx.beginPath();ctx.ellipse(cx+s*.08,y+s*.29,s*.02,s*.03,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(cx+s*.1,y+s*.26,s*.012,0,Math.PI*2);ctx.fill();
+  // 嘴
+  ctx.strokeStyle='#E88B8B';ctx.lineWidth=S.s(1.5);ctx.beginPath();ctx.arc(cx,y+s*.35,s*.035,0.1,Math.PI-.1);ctx.stroke();
+  // 腮红
+  ctx.fillStyle='rgba(255,150,150,0.25)';ctx.beginPath();ctx.ellipse(cx-s*.14,y+s*.32,s*.03,s*.018,0,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.ellipse(cx+s*.14,y+s*.32,s*.03,s*.018,0,0,Math.PI*2);ctx.fill();
+  // 身体
+  ctx.fillStyle='#9B59B6';ctx.beginPath();ctx.moveTo(cx-s*.12,y+s*.42);ctx.quadraticCurveTo(cx-s*.2,y+s*.7,cx-s*.18,y+s*.95);ctx.lineTo(cx+s*.18,y+s*.95);ctx.quadraticCurveTo(cx+s*.2,y+s*.7,cx+s*.12,y+s*.42);ctx.fill();
+  ctx.restore();
 }
 
-// ==================== 启动 ====================
+function drawBubble(x,y,mw,text){
+  if(!text)return;ctx.save();var fs=S.s(13);ctx.font=fs+'px Arial';
+  var lines=[],line='';
+  for(var i=0;i<text.length;i++){var tl=line+text[i];if(ctx.measureText(tl).width>mw-S.s(20)){lines.push(line);line=text[i];}else line=tl;}
+  if(line)lines.push(line);
+  var lh=fs+S.s(4),bh=lines.length*lh+S.s(16),bw=mw;
+  var a=Math.min(1,gs.npcTimer/30);
+  ctx.fillStyle='rgba(20,15,50,'+(0.9*a)+')';rr(ctx,x,y,bw,bh,S.s(8));ctx.fill();
+  ctx.strokeStyle=hex2rgba(C.neonPurple,.6*a);ctx.lineWidth=S.s(1);rr(ctx,x,y,bw,bh,S.s(8));ctx.stroke();
+  ctx.fillStyle=hex2rgba(C.textMain,a);ctx.font=fs+'px Arial';ctx.textAlign='left';ctx.textBaseline='top';
+  for(var li=0;li<lines.length;li++)ctx.fillText(lines[li],x+S.s(10),y+S.s(8)+li*lh);
+  ctx.restore();
+}
+
 init();
