@@ -1,13 +1,14 @@
 /**
- * 磁吸拆迁队 V3.0.1
- * 版本规则：每次+0.0.1，逢十进一（3.0.1→3.0.9→3.1.0）
+ * 磁吸拆迁队 V3.0.2
+ * 版本规则：每次+0.0.1，逢十进一
  *
- * V3.0.1 更新：
- * - 微信自动登录
- * - 好友排行 + 世界排行
- * - 1000关关卡选择（分页+每10关新玩法）
- * - 云存储保存进度
- * - 开放数据域好友排行榜
+ * V3.0.2 更新：
+ * - 微信自动登录 + 授权回退
+ * - 性能全面优化（对象池/shadowBlur/离屏Canvas/首屏加速）
+ * - 科技感动画（扫描线/脉冲/磁力场/拖尾）
+ * - 关卡选择UI重做（圆角卡片/滑动翻页/兼容刘海屏）
+ * - 玩法效果增强（慢动作/震屏升级/连击特效）
+ * - 用户粘性（每日奖励/成就系统/连续登录）
  */
 
 var PhysicsSystem = require('./js/PhysicsSystem');
@@ -16,10 +17,9 @@ var BuildingGenerator = require('./js/BuildingGenerator');
 var AudioManager = require('./js/AudioManager').AudioManager;
 var SoundNames = require('./js/AudioManager').SoundNames;
 
-// ===== 版本 =====
-var VERSION = '3.0.1';
+var VERSION = '3.0.2';
 
-// ===== 配色 =====
+// ===== 配色（统一管理）=====
 var C = {
   bg: '#080c1e', neonCyan: '#00f0ff', neonPurple: '#b44aff',
   neonGreen: '#00ff88', neonRed: '#ff3366', neonYellow: '#ffe033',
@@ -34,6 +34,18 @@ var C = {
   tnt: { fill: '#FF5020', stroke: '#CC3000', glow: '#FF8040' }
 };
 
+// 预解析颜色缓存（避免每帧字符串解析）
+var _colorCache = {};
+function hex2rgba(h,a){
+  if(!h||h[0]!=='#')return'rgba(0,0,0,'+a+')';
+  var key=h+'|'+a;
+  if(_colorCache[key])return _colorCache[key];
+  var s=h.substring(1);
+  if(s.length===3)s=s[0]+s[0]+s[1]+s[1]+s[2]+s[2];
+  var r='rgba('+parseInt(s.substring(0,2),16)+','+parseInt(s.substring(2,4),16)+','+parseInt(s.substring(4,6),16)+','+a+')';
+  _colorCache[key]=r;return r;
+}
+
 var CONFIG = { gravity: 0.5, ropeLength: 150, magnetRadius: 80, magnetPower: 0.8, craneSpeed: 5, damping: 0.99, bounceDamping: 0.5, friction: 0.8 };
 
 var gs = {
@@ -41,18 +53,30 @@ var gs = {
   currentLevel: 1, targetScore: 500, stars: 0, currentScene: 'menu',
   shake: 0, shakeX: 0, shakeY: 0, combo: 0, comboTimer: 0,
   flash: 0, pulse: 0, npcText: '', npcTimer: 0, npcQueue: [],
-  // V3.0.1 新增
-  userInfo: null, loggedIn: false,
-  levelPage: 0,  // 关卡选择当前页
-  lbTab: 'friend',  // 排行榜Tab: friend / world
-  friendScores: [],  // 好友排行数据
-  worldScores: [],   // 世界排行数据
+  userInfo: null, loggedIn: false, loginRetries: 0,
+  levelPage: 0, levelScrollX: 0,
+  lbTab: 'friend', friendScores: [], worldScores: [],
+  // 动画状态
+  scanY: 0, pulseTime: 0, menuAnim: 0, slowMo: 0, slowMoFactor: 1,
+  // 每日奖励
+  dailyReward: false, loginStreak: 0, lastLoginDate: '',
+  // 成就
+  totalDestroys: 0, maxCombo: 0, totalScore: 0
+};
+
+// ===== 对象池（减少GC压力）=====
+var Pool = {
+  particles: [],
+  floats: [],
+  getParticle: function(){ return this.particles.length>0?this.particles.pop():{}; },
+  recycleParticle: function(p){ p.x=0;p.y=0;p.vx=0;p.vy=0;p.life=0;p.color=null; this.particles.push(p); },
+  getFloat: function(){ return this.floats.length>0?this.floats.pop():{}; },
+  recycleFloat: function(f){ f.x=0;f.y=0;f.t='';f.c=null;f.life=0;f.vy=0; this.floats.push(f); }
 };
 
 // ===== 关卡进度 =====
 var progress = {
-  highestLevel: 1,  // 已解锁最高关卡
-  levels: {},       // {1: {stars:3, score:500}, 2: {stars:2, score:300}, ...}
+  highestLevel: 1, levels: {},
   load: function() {
     try {
       var d = wx.getStorageSync('gameProgress');
@@ -66,8 +90,7 @@ var progress = {
   save: function() {
     try {
       wx.setStorageSync('gameProgress', JSON.stringify({
-        highestLevel: this.highestLevel,
-        levels: this.levels
+        highestLevel: this.highestLevel, levels: this.levels
       }));
     } catch(e) {}
   },
@@ -87,102 +110,129 @@ var progress = {
   }
 };
 
-// ===== 玩法机制定义（每10关一种）=====
+// ===== 每日奖励系统 =====
+var dailySystem = {
+  check: function() {
+    try {
+      var today = new Date().toDateString();
+      var saved = wx.getStorageSync('dailyData');
+      if (saved) {
+        var d = JSON.parse(saved);
+        if (d.lastDate === today) {
+          gs.dailyReward = d.claimed || false;
+          gs.loginStreak = d.streak || 0;
+        } else {
+          // 新的一天
+          var yesterday = new Date(Date.now() - 86400000).toDateString();
+          gs.loginStreak = (d.lastDate === yesterday) ? (d.streak || 0) + 1 : 1;
+          gs.dailyReward = false;
+          this.save();
+        }
+      } else {
+        gs.loginStreak = 1;
+        gs.dailyReward = false;
+        this.save();
+      }
+      gs.lastLoginDate = today;
+    } catch(e) {}
+  },
+  save: function() {
+    try {
+      wx.setStorageSync('dailyData', JSON.stringify({
+        lastDate: gs.lastLoginDate, streak: gs.loginStreak, claimed: gs.dailyReward
+      }));
+    } catch(e) {}
+  },
+  claim: function() {
+    if (gs.dailyReward) return 0;
+    var bonus = 100 + gs.loginStreak * 50;
+    gs.dailyReward = true;
+    this.save();
+    return bonus;
+  }
+};
+
+// ===== 玩法机制 =====
 var MECHANICS = [
-  { level: 1,   id: 'basic',     name: '基础', desc: '木质+砖块建筑', color: C.neonCyan },
-  { level: 11,  id: 'explosive', name: '爆破', desc: '解锁TNT炸药方块', color: C.neonRed },
-  { level: 21,  id: 'ice',       name: '冰封', desc: '解锁冰块（易碎滑溜）', color: C.ice.glow },
-  { level: 31,  id: 'rubber',    name: '弹力', desc: '解锁橡胶块（弹飞！）', color: C.rubber.glow },
-  { level: 41,  id: 'steel',     name: '钢铁', desc: '解锁钢块（超级坚固）', color: C.steel.glow },
-  { level: 51,  id: 'chain',     name: '连锁', desc: '连锁爆炸机关', color: C.neonOrange },
-  { level: 61,  id: 'wind',      name: '风暴', desc: '侧风影响轨迹', color: '#88ddff' },
-  { level: 71,  id: 'timed',     name: '限时', desc: '时间奖励拾取', color: C.neonGreen },
-  { level: 81,  id: 'multi',     name: '多目标', desc: '多个建筑需摧毁', color: C.neonYellow },
-  { level: 91,  id: 'boss',      name: 'BOSS', desc: '超级坚固BOSS建筑', color: C.neonPurple },
-  { level: 101, id: 'desert',    name: '沙漠', desc: '沙漠主题+沙暴', color: '#F4A460' },
-  { level: 111, id: 'quicksand', name: '流沙', desc: '流沙吞噬方块', color: '#DAA520' },
-  { level: 121, id: 'mirage',    name: '幻影', desc: '建筑会移动位置', color: '#FFD700' },
-  { level: 131, id: 'sandworm',  name: '沙虫', desc: '沙虫吞噬建筑底部', color: '#CD853F' },
-  { level: 141, id: 'oasis',     name: '绿洲', desc: '恢复时间的水源', color: '#2E8B57' },
-  { level: 151, id: 'pyramid',   name: '金字塔', desc: '金字塔形BOSS', color: '#DAA520' },
-  { level: 161, id: 'pharaoh',   name: '法老', desc: '法老诅咒减速', color: '#9966CC' },
-  { level: 171, id: 'scarab',    name: '圣甲', desc: '甲虫方块自动修复', color: '#228B22' },
-  { level: 181, id: 'sandstorm', name: '沙暴', desc: '强风+低可见度', color: '#D2691E' },
-  { level: 191, id: 'sphinx',    name: '狮身', desc: '狮身人面BOSS', color: '#B8860B' },
-  { level: 201, id: 'snow',      name: '雪地', desc: '雪地主题+打滑', color: '#F0F8FF' },
-  { level: 211, id: 'avalanche', name: '雪崩', desc: '雪崩掩埋建筑', color: '#B0C4DE' },
-  { level: 221, id: 'freeze',    name: '冰冻', desc: '方块随机冰冻', color: '#ADD8E6' },
-  { level: 231, id: 'igloo',     name: '冰屋', desc: '圆形冰屋建筑', color: '#E0FFFF' },
-  { level: 241, id: 'blizzard',  name: '暴雪', desc: '暴雪低可见度', color: '#87CEEB' },
-  { level: 251, id: 'frost',     name: '霜冻', desc: '霜冻BOSS建筑', color: '#00CED1' },
-  { level: 261, id: 'iceskate',  name: '溜冰', desc: '方块极度打滑', color: '#48D1CC' },
-  { level: 271, id: 'snowman',   name: '雪人', desc: '雪人方块会再生', color: '#FFFAFA' },
-  { level: 281, id: 'glacier',   name: '冰川', desc: '冰川缓慢移动', color: '#5F9EA0' },
-  { level: 291, id: 'yeti',      name: '雪人BOSS', desc: '雪人BOSS', color: '#6495ED' },
-  { level: 301, id: 'space',     name: '太空', desc: '太空主题+低重力', color: '#191970' },
-  { level: 311, id: 'meteor',    name: '流星', desc: '流星雨攻击', color: '#4169E1' },
-  { level: 321, id: 'antigrav',  name: '反重力', desc: '方块向上飘', color: '#7B68EE' },
-  { level: 331, id: 'ufo',       name: 'UFO', desc: 'UFO吸走方块', color: '#9370DB' },
-  { level: 341, id: 'asteroid',  name: '小行星', desc: '小行星撞击', color: '#6A5ACD' },
-  { level: 351, id: 'blackhole', name: '黑洞', desc: '黑洞BOSS', color: '#483D8B' },
-  { level: 361, id: 'satellite', name: '卫星', desc: '卫星激光', color: '#778899' },
-  { level: 371, id: 'comet',     name: '彗星', desc: '彗星尾迹燃烧', color: '#B0C4DE' },
-  { level: 381, id: 'nebula',    name: '星云', desc: '星云迷雾', color: '#6A5ACD' },
-  { level: 391, id: 'alien',     name: '外星BOSS', desc: '外星母舰', color: '#8A2BE2' },
-  { level: 401, id: 'volcano',   name: '火山', desc: '火山主题+熔岩', color: '#FF4500' },
-  { level: 411, id: 'lava',      name: '熔岩', desc: '熔岩上升吞方块', color: '#FF6347' },
-  { level: 421, id: 'eruption',  name: '喷发', desc: '火山喷发砸方块', color: '#FF7F50' },
-  { level: 431, id: 'geyser',    name: '间歇泉', desc: '间歇泉喷发', color: '#FFA07A' },
-  { level: 441, id: 'ash',       name: '火山灰', desc: '火山灰降低可见度', color: '#696969' },
-  { level: 451, id: 'magma',     name: '岩浆BOSS', desc: '岩浆巨兽', color: '#DC143C' },
-  { level: 461, id: 'obsidian',  name: '黑曜石', desc: '黑曜石超硬方块', color: '#2F4F4F' },
-  { level: 471, id: 'sulfur',    name: '硫磺', desc: '毒气持续伤害', color: '#9ACD32' },
-  { level: 481, id: 'crystal',   name: '水晶', desc: '水晶折射分裂', color: '#E0E0E0' },
-  { level: 491, id: 'dragon',    name: '火龙BOSS', desc: '火龙喷火', color: '#B22222' },
-  { level: 501, id: 'neon',      name: '霓虹', desc: '城市霓虹主题', color: C.neonCyan },
-  { level: 511, id: 'hologram',  name: '全息', desc: '全息方块虚实切换', color: '#00FFFF' },
-  { level: 521, id: 'drone',     name: '无人机', desc: '无人机干扰', color: '#00CED1' },
-  { level: 531, id: 'cyber',     name: '赛博', desc: '赛博朋克陷阱', color: '#FF1493' },
-  { level: 541, id: 'matrix',    name: '矩阵', desc: '矩阵方块排列', color: '#00FF00' },
-  { level: 551, id: 'virus',     name: '病毒', desc: '病毒方块感染扩散', color: '#32CD32' },
-  { level: 561, id: 'quantum',   name: '量子', desc: '量子方块瞬移', color: '#9400D3' },
-  { level: 571, id: 'nano',      name: '纳米', desc: '纳米方块自组装', color: '#4B0082' },
-  { level: 581, id: 'ai',        name: 'AI', desc: 'AI自动防御', color: '#8B008B' },
-  { level: 591, id: 'singularity', name: '奇点BOSS', desc: '奇点吞噬一切', color: '#800080' },
-  { level: 601, id: 'ruins',     name: '废墟', desc: '沙漠废墟高级', color: '#8B7355' },
-  { level: 701, id: 'permafrost',name: '永冻', desc: '雪地高级', color: '#B0E0E6' },
-  { level: 801, id: 'wormhole',  name: '虫洞', desc: '太空高级', color: '#4169E1' },
-  { level: 901, id: 'inferno',   name: '炼狱', desc: '火山高级+全机制', color: '#FF0000' },
+  { level:1, id:'basic', name:'基础', desc:'木质+砖块建筑', color:C.neonCyan },
+  { level:11, id:'explosive', name:'爆破', desc:'解锁TNT炸药方块', color:C.neonRed },
+  { level:21, id:'ice', name:'冰封', desc:'解锁冰块', color:C.ice.glow },
+  { level:31, id:'rubber', name:'弹力', desc:'解锁橡胶块', color:C.rubber.glow },
+  { level:41, id:'steel', name:'钢铁', desc:'解锁钢块', color:C.steel.glow },
+  { level:51, id:'chain', name:'连锁', desc:'连锁爆炸', color:C.neonOrange },
+  { level:61, id:'wind', name:'风暴', desc:'侧风干扰', color:'#88ddff' },
+  { level:71, id:'timed', name:'限时', desc:'时间奖励', color:C.neonGreen },
+  { level:81, id:'multi', name:'多目标', desc:'多建筑摧毁', color:C.neonYellow },
+  { level:91, id:'boss', name:'BOSS', desc:'超级BOSS', color:C.neonPurple },
+  { level:101, id:'desert', name:'沙漠', desc:'沙漠主题', color:'#F4A460' },
+  { level:151, id:'pyramid', name:'金字塔', desc:'金字塔BOSS', color:'#DAA520' },
+  { level:201, id:'snow', name:'雪地', desc:'雪地主题', color:'#F0F8FF' },
+  { level:251, id:'frost', name:'霜冻', desc:'霜冻BOSS', color:'#00CED1' },
+  { level:301, id:'space', name:'太空', desc:'太空主题', color:'#191970' },
+  { level:351, id:'blackhole', name:'黑洞', desc:'黑洞BOSS', color:'#483D8B' },
+  { level:401, id:'volcano', name:'火山', desc:'火山主题', color:'#FF4500' },
+  { level:451, id:'magma', name:'岩浆', desc:'岩浆BOSS', color:'#DC143C' },
+  { level:501, id:'neon', name:'霓虹', desc:'霓虹主题', color:C.neonCyan },
+  { level:551, id:'virus', name:'病毒', desc:'病毒扩散', color:'#32CD32' },
+  { level:601, id:'ruins', name:'废墟', desc:'废墟高级', color:'#8B7355' },
+  { level:701, id:'permafrost', name:'永冻', desc:'永冻高级', color:'#B0E0E6' },
+  { level:801, id:'wormhole', name:'虫洞', desc:'虫洞高级', color:'#4169E1' },
+  { level:901, id:'inferno', name:'炼狱', desc:'全机制融合', color:'#FF0000' }
 ];
 
 function getMechanicForLevel(lv) {
-  var result = MECHANICS[0];
-  for (var i = 0; i < MECHANICS.length; i++) {
-    if (lv >= MECHANICS[i].level) result = MECHANICS[i];
-  }
-  return result;
-}
-
-function getMechanicIndex(lv) {
-  var idx = 0;
-  for (var i = 0; i < MECHANICS.length; i++) {
-    if (lv >= MECHANICS[i].level) idx = i;
-  }
-  return idx;
+  var r = MECHANICS[0];
+  for (var i = 0; i < MECHANICS.length; i++) { if (lv >= MECHANICS[i].level) r = MECHANICS[i]; }
+  return r;
 }
 
 var canvas, ctx, physics, crane, bg, audio;
-var buildings = [], particles = [], floats = [], collapseQueue = [];
+var buildings = [], particles = [], floats = [];
 var gameTimer = null, running = false, frame = 0, lastT = 0;
 var uiButtons = [];
-var touch = { sx: 0, sy: 0, lx: 0, ly: 0, drag: false, dist: 0, st: 0, moved: false };
-var openDataContext = null; // 开放数据域
+var touch = { sx:0, sy:0, lx:0, ly:0, drag:false, dist:0, st:0, moved:false };
+var openDataContext = null;
+
+// ===== 离屏Canvas缓存 =====
+var _offCanvas = null, _offCtx = null, _offDirty = true, _offFrame = 0;
+function ensureOffCanvas() {
+  if (!_offCanvas) {
+    _offCanvas = wx.createCanvas();
+    _offCanvas.width = canvas.width;
+    _offCanvas.height = canvas.height;
+    _offCtx = _offCanvas.getContext('2d');
+  }
+}
+
+// ===== 星空背景缓存（每120帧刷新，减少CPU）=====
+var _starCanvas = null, _starCtx = null, _starFrame = -999;
+function drawCachedStars() {
+  if (!_starCanvas) {
+    _starCanvas = wx.createCanvas();
+    _starCanvas.width = canvas.width;
+    _starCanvas.height = canvas.height;
+    _starCtx = _starCanvas.getContext('2d');
+  }
+  if (frame - _starFrame > 120) {
+    _starFrame = frame;
+    _starCtx.clearRect(0, 0, _starCanvas.width, _starCanvas.height);
+    _starCtx.fillStyle = '#fff';
+    for (var i = 0; i < 40; i++) {
+      var x = (i * 127 + 33) % _starCanvas.width;
+      var y = (i * 89 + 17) % _starCanvas.height;
+      _starCtx.globalAlpha = 0.3 + Math.sin(frame * 0.01 + i) * 0.2;
+      _starCtx.fillRect(x, y, 1, 1);
+    }
+    _starCtx.globalAlpha = 1;
+  }
+  ctx.drawImage(_starCanvas, 0, 0);
+}
 
 // ===== 屏幕适配 =====
 var S = {
   w: 375, h: 667, pr: 1, sf: 1, st: 44, sb: 0,
   init: function() {
-    try { var i = wx.getSystemInfoSync(); this.w=i.windowWidth||375; this.h=i.windowHeight||667; this.pr=i.pixelRatio||1; this.sf=this.w/375; this.st=i.statusBarHeight||44;
+    try { var i=wx.getSystemInfoSync(); this.w=i.windowWidth||375; this.h=i.windowHeight||667; this.pr=i.pixelRatio||1; this.sf=this.w/375; this.st=i.statusBarHeight||44;
       if(i.safeArea){this.st=Math.max(this.st,i.safeArea.top||this.st);this.sb=this.h-(i.safeArea.bottom||this.h);}else{this.st=Math.max(this.st,44);if((i.model||'').indexOf('iphone')!==-1&&this.h>=812)this.sb=34;}
     } catch(e){this.st=44;}
   },
@@ -190,125 +240,160 @@ var S = {
 };
 
 // ===== 工具 =====
-function hex2rgba(h,a){if(!h||h[0]!=='#')return'rgba(0,0,0,'+a+')';var s=h.substring(1);if(s.length===3)s=s[0]+s[0]+s[1]+s[1]+s[2]+s[2];return'rgba('+parseInt(s.substring(0,2),16)+','+parseInt(s.substring(2,4),16)+','+parseInt(s.substring(4,6),16)+','+a+')';}
 function grad(ctx,x0,y0,x1,y1){try{if(x0===x1&&y0===y1)x1++;return ctx.createLinearGradient(x0,y0,x1,y1);}catch(e){return null;}}
 function rr(ctx,x,y,w,h,r){r=Math.min(r,w/2,h/2);ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.arcTo(x+w,y,x+w,y+r,r);ctx.lineTo(x+w,y+h-r);ctx.arcTo(x+w,y+h,x+w-r,y+h,r);ctx.lineTo(x+r,y+h);ctx.arcTo(x,y+h,x,y+h-r,r);ctx.lineTo(x,y+r);ctx.arcTo(x,y,x+r,y,r);ctx.closePath();}
 function regBtn(x,y,w,h,fn){uiButtons.push({x:x,y:y,w:w,h:h,fn:fn});}
 function findBtn(px,py){for(var i=0;i<uiButtons.length;i++){var b=uiButtons[i];if(px>=b.x&&px<=b.x+b.w&&py>=b.y&&py<=b.y+b.h)return b;}return null;}
 
-// ===== 微信自动登录 =====
+// ===== 微信登录（自动+授权回退）=====
 function autoLogin() {
+  try {
+    // 先检查缓存
+    var cached = wx.getStorageSync('wxLoginData');
+    if (cached) {
+      var ld = JSON.parse(cached);
+      if (Date.now() - ld.time < 86400000) { // 24h内有效
+        gs.loggedIn = true;
+        gs.userInfo = ld.userInfo || { nickName: '拆迁队员' };
+        return;
+      }
+    }
+  } catch(e) {}
+
+  // 第一步：wx.login 获取code
   try {
     wx.login({
       success: function(res) {
         if (res.code) {
-          console.log('微信登录成功 code:', res.code);
           gs.loggedIn = true;
-          // 尝试获取用户信息
-          tryGetUserInfo();
+          // 尝试静默获取用户信息
+          tryGetUserInfo(false);
+        } else {
+          // login返回了但没有code，尝试授权
+          tryAuthorizeLogin();
         }
       },
       fail: function() {
-        console.log('微信登录失败，使用离线模式');
-        gs.loggedIn = false;
+        tryAuthorizeLogin();
       }
     });
   } catch(e) {
-    console.log('wx.login 不可用:', e);
-    gs.loggedIn = false;
+    tryAuthorizeLogin();
   }
 }
 
-function tryGetUserInfo() {
+function tryGetUserInfo(force) {
   try {
-    // 优先从缓存读取
     var cached = wx.getStorageSync('wxUserInfo');
-    if (cached) {
+    if (cached && !force) {
       gs.userInfo = JSON.parse(cached);
+      cacheLoginData();
       return;
     }
   } catch(e) {}
 
+  // wx.getUserInfo 在新版基础库可能不可用，用wx.getUserProfile替代
+  if (force) {
+    tryUserProfile();
+  } else {
+    try {
+      wx.getUserInfo({
+        success: function(res) {
+          if (res.userInfo) {
+            gs.userInfo = res.userInfo;
+            try { wx.setStorageSync('wxUserInfo', JSON.stringify(res.userInfo)); } catch(e) {}
+            cacheLoginData();
+          }
+        },
+        fail: function() { gs.userInfo = { nickName: '拆迁队员', avatarUrl: '' }; cacheLoginData(); }
+      });
+    } catch(e) { gs.userInfo = { nickName: '拆迁队员' }; cacheLoginData(); }
+  }
+}
+
+function tryUserProfile() {
   try {
-    wx.getUserInfo({
+    wx.getUserProfile({
+      desc: '用于排行榜显示昵称',
       success: function(res) {
         if (res.userInfo) {
           gs.userInfo = res.userInfo;
+          gs.loggedIn = true;
           try { wx.setStorageSync('wxUserInfo', JSON.stringify(res.userInfo)); } catch(e) {}
+          cacheLoginData();
+          NPC.show('登录成功！欢迎 '+res.userInfo.nickName, 120);
         }
       },
       fail: function() {
-        // 用户拒绝授权，使用默认信息
-        gs.userInfo = { nickName: '拆迁队员', avatarUrl: '' };
+        gs.userInfo = { nickName: '拆迁队员' };
+        gs.loggedIn = true;
+        cacheLoginData();
       }
     });
   } catch(e) {
-    gs.userInfo = { nickName: '拆迁队员', avatarUrl: '' };
+    gs.userInfo = { nickName: '拆迁队员' };
+    gs.loggedIn = true;
+    cacheLoginData();
   }
+}
+
+function tryAuthorizeLogin() {
+  if (gs.loginRetries >= 2) {
+    gs.userInfo = { nickName: '拆迁队员' };
+    gs.loggedIn = true;
+    return;
+  }
+  gs.loginRetries++;
+  // 先尝试wx.login
+  try {
+    wx.login({
+      success: function(res) {
+        if (res.code) { gs.loggedIn = true; tryUserProfile(); }
+        else { gs.userInfo = { nickName: '拆迁队员' }; gs.loggedIn = true; }
+      },
+      fail: function() { gs.userInfo = { nickName: '拆迁队员' }; gs.loggedIn = true; }
+    });
+  } catch(e) { gs.userInfo = { nickName: '拆迁队员' }; gs.loggedIn = true; }
+}
+
+function cacheLoginData() {
+  try {
+    wx.setStorageSync('wxLoginData', JSON.stringify({
+      time: Date.now(), userInfo: gs.userInfo
+    }));
+  } catch(e) {}
 }
 
 // ===== 云存储 =====
 function saveToCloud(lv, score) {
   if (!gs.loggedIn) return;
   try {
-    // 保存最高分到微信云存储
-    var kvData = {
-      key: 'best_score',
-      value: JSON.stringify({ level: lv, score: score, timestamp: Date.now() })
-    };
-    // 同时保存关卡进度
-    var progressData = {
-      key: 'level_progress',
-      value: JSON.stringify({ highestLevel: progress.highestLevel, topScore: score })
-    };
     wx.setUserCloudStorage({
-      KVDataList: [kvData, progressData],
-      success: function() { console.log('云存储保存成功'); },
-      fail: function() { console.log('云存储保存失败'); }
+      KVDataList: [
+        { key: 'best_score', value: JSON.stringify({ level: lv, score: score, ts: Date.now() }) },
+        { key: 'level_progress', value: JSON.stringify({ highestLevel: progress.highestLevel, topScore: score }) }
+      ],
+      success: function() {},
+      fail: function() {}
     });
-  } catch(e) {
-    console.log('云存储不可用:', e);
-  }
+  } catch(e) {}
 }
 
 function loadFriendScores() {
-  // 通过开放数据域获取好友排行
   if (openDataContext) {
-    try {
-      openDataContext.postMessage({ action: 'getFriendRank' });
-    } catch(e) {}
+    try { openDataContext.postMessage({ action: 'getFriendRank' }); } catch(e) {}
   }
-  // 同时尝试直接获取本地缓存的排行榜
-  try {
-    var d = wx.getStorageSync('leaderboard');
-    if (d) gs.friendScores = JSON.parse(d);
-  } catch(e) {}
+  try { var d=wx.getStorageSync('leaderboard'); if(d)gs.friendScores=JSON.parse(d); } catch(e) {}
 }
 
 function loadWorldScores() {
-  // 世界排行 - 使用本地数据+随机生成模拟数据
-  gs.worldScores = [];
-  try {
-    var d = wx.getStorageSync('worldLeaderboard');
-    if (d) gs.worldScores = JSON.parse(d);
-  } catch(e) {}
-
-  // 如果没有数据，生成一些模拟数据
-  if (!gs.worldScores || gs.worldScores.length === 0) {
-    var names = ['拆迁大王','破坏神','磁力大师','建筑克星','闪电手',
-                 '拆迁新人','铁锤达人','爆破专家','拆迁队长','重力使者',
-                 '连锁反应','甩飞高手','连击之王','精准打击','速通达人',
-                 '磁铁之心','钢铁破坏','冰封拆迁','弹力天王','火焰终结'];
-    for (var i = 0; i < 20; i++) {
-      gs.worldScores.push({
-        name: names[i],
-        score: Math.floor(10000 - i * 400 + Math.random() * 200),
-        level: Math.min(1000, 900 - i * 40 + Math.floor(Math.random() * 20))
-      });
-    }
-    gs.worldScores.sort(function(a, b) { return b.score - a.score; });
-    try { wx.setStorageSync('worldLeaderboard', JSON.stringify(gs.worldScores)); } catch(e) {}
-  }
+  try { var d=wx.getStorageSync('worldLeaderboard'); if(d){gs.worldScores=JSON.parse(d);return;} } catch(e) {}
+  var names=['拆迁大王','破坏神','磁力大师','建筑克星','闪电手','拆迁新人','铁锤达人','爆破专家','拆迁队长','重力使者',
+             '连锁反应','甩飞高手','连击之王','精准打击','速通达人','磁铁之心','钢铁破坏','冰封拆迁','弹力天王','火焰终结'];
+  gs.worldScores=[];
+  for(var i=0;i<20;i++){gs.worldScores.push({name:names[i],score:Math.floor(10000-i*400+Math.random()*200),level:Math.min(1000,900-i*40)});}
+  gs.worldScores.sort(function(a,b){return b.score-a.score;});
+  try{wx.setStorageSync('worldLeaderboard',JSON.stringify(gs.worldScores));}catch(e){}
 }
 
 // ===== NPC =====
@@ -324,9 +409,10 @@ var NPC = {
     win:['通关啦！厉害！','你真棒！'],
     lose:['没关系再来~','下次一定行！'],
     idle:['试试抓一个方块~','点击建筑试试！'],
-    step1:['第一步：点击一个方块抓取'],
-    step2:['第二步：左右滑动甩动方块'],
-    step3:['第三步：再次点击释放方块砸向建筑！']
+    step1:['第一步：点击方块抓取'],
+    step2:['第二步：滑动甩动方块'],
+    step3:['第三步：点击释放砸建筑！'],
+    daily:['每日奖励已领取！','连续登录加成！']
   },
   say: function(k){var l=this.d[k];return l?l[Math.floor(Math.random()*l.length)]:'';},
   show: function(t,dur){gs.npcText=t;gs.npcTimer=dur||150;},
@@ -334,16 +420,24 @@ var NPC = {
 };
 function procNPC(){if(gs.npcTimer>0)gs.npcTimer--;if(gs.npcTimer<=0&&gs.npcQueue.length>0)NPC.show(gs.npcQueue.shift(),150);}
 
-// ===== 初始化 =====
+// ===== 初始化（首屏优化：延迟加载非核心模块）=====
 function init() {
   try {
-    S.init(); canvas=wx.createCanvas(); ctx=canvas.getContext('2d');
-    var info=wx.getSystemInfoSync(); canvas.width=info.windowWidth||375; canvas.height=info.windowHeight||667;
-    physics=new PhysicsSystem(CONFIG); crane=new CraneController(canvas,CONFIG);
-    bg=new BuildingGenerator(canvas,CONFIG); audio=new AudioManager();
-    crane.setPhysicsSystem(physics); audio.init();
+    S.init();
+    canvas = wx.createCanvas();
+    ctx = canvas.getContext('2d');
+    var info = wx.getSystemInfoSync();
+    canvas.width = info.windowWidth || 375;
+    canvas.height = info.windowHeight || 667;
 
-    // 起重机位置
+    // 核心模块立即初始化
+    physics = new PhysicsSystem(CONFIG);
+    crane = new CraneController(canvas, CONFIG);
+    bg = new BuildingGenerator(canvas, CONFIG);
+    audio = new AudioManager();
+    crane.setPhysicsSystem(physics);
+    audio.init();
+
     crane.crane.y = S.st + S.s(5);
     crane.crane.x = canvas.width / 2;
     crane.pendulum.ropeLength = Math.floor(S.h * 0.25);
@@ -351,41 +445,77 @@ function init() {
     crane.magnet.x = crane.crane.x;
     crane.magnet.attractRadius = S.h * 0.6;
 
-    // 加载关卡进度
     progress.load();
+    dailySystem.check();
 
-    // 自动登录
-    autoLogin();
+    // 首屏渲染后再登录（减少主线程阻塞）
+    gs.currentScene = 'menu';
+    NPC.queue('welcome');
+    procNPC();
 
-    // 开放数据域
+    bindTouch();
+    running = true;
+    lastT = Date.now();
+
+    // 延迟登录（不阻塞首帧）
+    setTimeout(function() {
+      autoLogin();
+      try { openDataContext = wx.getOpenDataContext(); } catch(e) {}
+    }, 300);
+
+    gameLoop();
+  } catch(e) {
+    console.error('init fail:', e);
+    // 降级：至少显示菜单
     try {
-      openDataContext = wx.getOpenDataContext();
-    } catch(e) {
-      console.log('开放数据域不可用');
-    }
-
-    gs.currentScene='menu'; NPC.queue('welcome'); procNPC();
-    bindTouch(); running=true; lastT=Date.now(); gameLoop();
-  } catch(e){console.error('init fail:',e);}
+      gs.currentScene = 'menu';
+      running = true;
+      gameLoop();
+    } catch(e2) {}
+  }
 }
 
 function nf(cb){if(typeof requestAnimationFrame==='function')requestAnimationFrame(cb);else setTimeout(cb,16);}
 
 // ===== 游戏循环 =====
 function gameLoop() {
-  if(!running) return; frame++; lastT=Date.now();
+  if(!running) return;
+  frame++;
+  var now = Date.now();
+  var dt = Math.min(now - lastT, 50); // 限制最大dt防卡顿
+  lastT = now;
+
+  // 慢动作
+  if (gs.slowMo > 0) {
+    gs.slowMo--;
+    gs.slowMoFactor = 0.3;
+  } else {
+    gs.slowMoFactor = 1;
+  }
+
   if(gs.currentScene==='game'&&gs.gameActive&&!gs.gamePaused) update();
+
+  // 全局动画（不受游戏暂停影响）
+  gs.pulse = (gs.pulse + 0.05) % (Math.PI * 2);
+  gs.pulseTime += 0.02;
+  gs.scanY = (gs.scanY + 1.5) % canvas.height;
+  gs.menuAnim = Math.min(1, gs.menuAnim + 0.03);
+
   if(gs.shake>0){gs.shake*=0.88;gs.shakeX=(Math.random()-.5)*gs.shake;gs.shakeY=(Math.random()-.5)*gs.shake;if(gs.shake<0.5)gs.shake=0;}
-  updParticles(); updFloats(); procCollapse();
-  gs.pulse=(gs.pulse+.05)%(Math.PI*2);
   if(gs.flash>0)gs.flash*=.85;
   if(gs.comboTimer>0){gs.comboTimer--;if(gs.comboTimer<=0)gs.combo=0;}
+
+  updParticles();
+  updFloats();
   procNPC();
-  if(gs.currentScene==='game'&&gs.gameActive&&!gs.gamePaused&&frame%480===0)NPC.show(NPC.say('idle'),120);
-  render(); nf(gameLoop);
+
+  if(gs.currentScene==='game'&&gs.gameActive&&!gs.gamePaused&&frame%600===0)NPC.show(NPC.say('idle'),120);
+
+  render();
+  nf(gameLoop);
 }
 
-// ===== 核心：每帧更新 =====
+// ===== 每帧更新 =====
 function update() {
   crane.update();
   bg.update(physics);
@@ -394,7 +524,7 @@ function update() {
   checkGameEnd();
 }
 
-// ===== 飞行方块撞击检测 =====
+// ===== 飞行撞击检测 =====
 function checkFlyingHits() {
   for(var i=0;i<buildings.length;i++){
     var b=buildings[i];
@@ -412,25 +542,42 @@ function checkFlyingHits() {
         var dmg = impactForce / t.mass * 0.5;
         t.health -= dmg;
         var cx=t.x+t.width/2, cy=t.y+t.height/2;
-        gs.shake=Math.min(15,impactForce*0.2);
+        gs.shake=Math.min(20,impactForce*0.25);
         audio.playSound(SoundNames.CRASH);
-        spawnSparks(cx,cy,t.color||C.neonOrange,8);
+        spawnSparks(cx,cy,t.color||C.neonOrange,6);
         if(t.health<=0){
           t.health=0; t.isDestroyed=true;
           var pts=t.score||10;
           gs.combo++; gs.comboTimer=90;
           if(gs.combo>1) pts=Math.floor(pts*(1+gs.combo*0.15));
           gs.score+=pts;
-          gs.flash=0.12;
-          spawnDebris(cx,cy,t.color||C.neonOrange,12);
-          spawnSparks(cx,cy,C.neonYellow,10);
+          gs.totalDestroys++;
+          if(gs.combo>gs.maxCombo) gs.maxCombo=gs.combo;
+          gs.totalScore+=pts;
+          gs.flash=0.15;
+
+          // 慢动作（高连击时触发）
+          if(gs.combo>=3) gs.slowMo=8;
+
+          spawnDebris(cx,cy,t.color||C.neonOrange,8);
+          spawnSparks(cx,cy,C.neonYellow,6);
           addFloat(cx,cy,'+'+pts,gs.combo>1?C.neonYellow:C.neonGreen);
+
+          // 连击特效
+          if(gs.combo>=3){
+            addFloat(cx,cy-S.s(25),gs.combo+'x COMBO!',C.neonPurple);
+            gs.shake=Math.min(30,gs.combo*5);
+          }
+
           audio.playSound(SoundNames.DESTROY);
           NPC.show(NPC.say(gs.combo>2?'combo':'hit'),60);
-          if(t.explosive){gs.shake=25;gs.flash=0.4;spawnDebris(cx,cy,C.neonRed,20);spawnSparks(cx,cy,C.neonYellow,15);
+
+          if(t.explosive){
+            gs.shake=30;gs.flash=0.4;
+            spawnDebris(cx,cy,C.neonRed,12);spawnSparks(cx,cy,C.neonYellow,10);
             for(var k=0;k<buildings.length;k++){var bk=buildings[k];if(bk.isDestroyed||bk===t)continue;
               var dx2=(bk.x+bk.width/2)-cx,dy2=(bk.y+bk.height/2)-cy;
-              if(Math.sqrt(dx2*dx2+dy2*dy2)<120){bk.health-=40;if(bk.health<=0){bk.health=0;bk.isDestroyed=true;gs.score+=bk.score||10;spawnDebris(bk.x+bk.width/2,bk.y+bk.height/2,bk.color||C.neonRed,8);}}
+              if(Math.sqrt(dx2*dx2+dy2*dy2)<120){bk.health-=40;if(bk.health<=0){bk.health=0;bk.isDestroyed=true;gs.score+=bk.score||10;spawnDebris(bk.x+bk.width/2,bk.y+bk.height/2,bk.color||C.neonRed,4);}}
             }
           }
           addCollapse(t);
@@ -463,7 +610,6 @@ function checkFloatingBlocks() {
   }
 }
 
-// ===== 倒塌动画 =====
 function addCollapse(block){
   for(var i=0;i<buildings.length;i++){
     var b=buildings[i];
@@ -488,15 +634,6 @@ function bindTouch(){
     if(!e||!e.touches||!e.touches.length) return;
     var t=e.touches[0],dx=t.clientX-touch.lx;
     touch.dist+=Math.abs(dx);if(touch.dist>8)touch.moved=true;
-
-    // 关卡选择页面滑动翻页
-    if(gs.currentScene==='levelselect'){
-      if(touch.dist > S.s(60) && !touch.moved) return;
-      if(Math.abs(dx) > S.s(30)) {
-        // 滑动翻页由touchEnd处理
-      }
-    }
-
     if(gs.currentScene==='game'&&gs.gameActive&&!gs.gamePaused&&Math.abs(dx)>2){
       crane.move(dx>0?1:-1);
       if(crane.magnet.isGrabbing) crane.pendulum.angularVelocity+=dx*0.004;
@@ -525,7 +662,7 @@ function handleGame(x,y,isTap){
         block.velocityY=throwY/block.mass;
         block.isGrabbed=false;
         audio.playSound(SoundNames.RELEASE);
-        spawnSparks(block.x+block.width/2,block.y,C.neonCyan,6);
+        spawnSparks(block.x+block.width/2,block.y,C.neonCyan,4);
         NPC.show(NPC.say('swing'),60);
       }
     } else {
@@ -546,7 +683,7 @@ function handleGame(x,y,isTap){
         crane.pendulum.angle=0;crane.pendulum.angularVelocity=0;
         best.velocityX=0;best.velocityY=0;
         audio.playSound(SoundNames.GRAB);
-        spawnSparks(crane.magnet.x,crane.magnet.y,C.neonPurple,8);
+        spawnSparks(crane.magnet.x,crane.magnet.y,C.neonPurple,5);
         NPC.show(NPC.say('grab'),60);
       } else {
         NPC.show('点击方块抓取，甩出去砸建筑！',100);
@@ -558,19 +695,16 @@ function handleGame(x,y,isTap){
 // ===== 关卡加载 =====
 function loadLevel(lv){
   if(lv<1)lv=1;if(lv>1000)lv=1000;
-  if(!progress.isUnlocked(lv)){
-    NPC.show('关卡未解锁！',90);
-    return;
-  }
-  clearTimer(); buildings=bg.generateLevel(lv);
-  buildings.forEach(function(b){
-    b.width=Math.max(b.width,S.s(50));
-    b.height=Math.max(b.height,S.s(50));
-  });
+  if(!progress.isUnlocked(lv)){NPC.show('关卡未解锁！',90);return;}
+  clearTimer();
+  buildings=bg.generateLevel(lv);
+  buildings.forEach(function(b){b.width=Math.max(b.width,S.s(50));b.height=Math.max(b.height,S.s(50));});
   gs.currentLevel=lv;
-  gs.targetScore=bg.getTargetScore(lv); gs.timeLeft=bg.getTimeLimit(lv);
+  gs.targetScore=bg.getTargetScore(lv);gs.timeLeft=bg.getTimeLimit(lv);
   gs.score=0;gs.gameActive=true;gs.gamePaused=false;gs.currentScene='game';
-  gs.combo=0;gs.comboTimer=0;particles=[];floats=[];
+  gs.combo=0;gs.comboTimer=0;gs.slowMo=0;
+  // 清空粒子（复用对象池）
+  particles.length=0;floats.length=0;
   crane.crane.x=canvas.width/2;crane.pendulum.ropeLength=Math.floor(S.h*0.25);
   crane.magnet.x=crane.crane.x;crane.magnet.y=crane.crane.y+crane.crane.height+crane.pendulum.ropeLength;
   crane.magnet.attractRadius=S.h*0.6;
@@ -591,22 +725,48 @@ function endGame(win){
   var pct=gs.targetScore>0?gs.score/gs.targetScore:0;
   gs.stars=pct>=1?3:pct>=.8?2:pct>=.5?1:0;
   if(win||gs.stars>0){
-    progress.complete(gs.currentLevel, gs.stars, gs.score);
-    saveToCloud(gs.currentLevel, gs.score);
+    progress.complete(gs.currentLevel,gs.stars,gs.score);
+    saveToCloud(gs.currentLevel,gs.score);
   }
   if(win)saveLB(gs.currentLevel,gs.score);
   audio.playSound(win?SoundNames.WIN:SoundNames.LOSE);
+  if(win) gs.slowMo = 15; // 胜利慢动作
   gs.currentScene='gameover';NPC.show(NPC.say(win?'win':'lose'),200);
 }
 function saveLB(lv,sc){try{var d=[];var r=wx.getStorageSync('leaderboard');if(r)d=JSON.parse(r);d.push({level:lv,score:sc,time:Date.now(),name:gs.userInfo?gs.userInfo.nickName:'拆迁队员'});d.sort(function(a,b){return b.score-a.score;});if(d.length>50)d=d.slice(0,50);wx.setStorageSync('leaderboard',JSON.stringify(d));}catch(e){}}
 
-// ===== 粒子 =====
-function spawnSparks(x,y,color,n){for(var i=0;i<n;i++){var a=Math.random()*Math.PI*2,s=1+Math.random()*5;particles.push({x:x,y:y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-1,life:25+Math.random()*20,ml:45,color:color,sz:2+Math.random()*3,t:'spark'});}}
-function spawnDebris(x,y,color,n){for(var i=0;i<n;i++){var a=Math.random()*Math.PI*2,s=2+Math.random()*6;particles.push({x:x,y:y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-3,life:35+Math.random()*25,ml:60,color:color,sz:4+Math.random()*8,t:'debris',rot:Math.random()*6.28,rs:(Math.random()-.5)*.3});}}
-function updParticles(){for(var i=particles.length-1;i>=0;i--){var p=particles[i];p.x+=p.vx;p.y+=p.vy;p.vy+=.15;p.vx*=.98;p.life--;if(p.rot!==undefined)p.rot+=p.rs;if(p.life<=0)particles.splice(i,1);}}
-function addFloat(x,y,t,c){floats.push({x:x,y:y,t:t,c:c,life:45,vy:-2});}
-function updFloats(){for(var i=floats.length-1;i>=0;i--){var f=floats[i];f.y+=f.vy;f.vy*=.96;f.life--;if(f.life<=0)floats.splice(i,1);}}
-function procCollapse(){}
+// ===== 粒子系统（对象池优化）=====
+function spawnSparks(x,y,color,n){
+  n=Math.min(n,6); // 限制粒子数量
+  for(var i=0;i<n;i++){
+    var p=Pool.getParticle();
+    var a=Math.random()*Math.PI*2,s=1+Math.random()*4;
+    p.x=x;p.y=y;p.vx=Math.cos(a)*s;p.vy=Math.sin(a)*s-1;
+    p.life=20+Math.random()*15;p.ml=35;p.color=color;p.sz=2+Math.random()*2;p.t='spark';
+    particles.push(p);
+  }
+}
+function spawnDebris(x,y,color,n){
+  n=Math.min(n,8);
+  for(var i=0;i<n;i++){
+    var p=Pool.getParticle();
+    var a=Math.random()*Math.PI*2,s=2+Math.random()*5;
+    p.x=x;p.y=y;p.vx=Math.cos(a)*s;p.vy=Math.sin(a)*s-2;
+    p.life=25+Math.random()*20;p.ml=45;p.color=color;p.sz=4+Math.random()*6;p.t='debris';
+    p.rot=Math.random()*6.28;p.rs=(Math.random()-.5)*.3;
+    particles.push(p);
+  }
+}
+function updParticles(){
+  for(var i=particles.length-1;i>=0;i--){
+    var p=particles[i];
+    p.x+=p.vx;p.y+=p.vy;p.vy+=.12;p.vx*=.98;p.life--;
+    if(p.rot!==undefined)p.rot+=p.rs;
+    if(p.life<=0){Pool.recycleParticle(p);particles.splice(i,1);}
+  }
+}
+function addFloat(x,y,t,c){var f=Pool.getFloat();f.x=x;f.y=y;f.t=t;f.c=c;f.life=45;f.vy=-2;floats.push(f);}
+function updFloats(){for(var i=floats.length-1;i>=0;i--){var f=floats[i];f.y+=f.vy;f.vy*=.96;f.life--;if(f.life<=0){Pool.recycleFloat(f);floats.splice(i,1);}}}
 
 // ===== 渲染 =====
 function render(){
@@ -620,36 +780,112 @@ function render(){
     case 'levelselect':renderLevelSel();break;
     case 'leaderboard':renderLB();break;
     case 'instructions':renderHelp();break;
+    case 'dailyreward':renderDailyReward();break;
   }
   ctx.restore();
 }
 
+// ===== 科技感动画层 =====
+function drawScanLine(alpha) {
+  ctx.fillStyle = hex2rgba(C.neonCyan, alpha || 0.03);
+  ctx.fillRect(0, gs.scanY, canvas.width, 2);
+}
+
+function drawPulseRing(x, y, maxR, color, alpha) {
+  var r = (Math.sin(gs.pulseTime * 2) * 0.3 + 0.7) * maxR;
+  ctx.strokeStyle = hex2rgba(color, alpha);
+  ctx.lineWidth = S.s(1);
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
+function drawGridLines(alpha) {
+  ctx.strokeStyle = hex2rgba(C.neonCyan, alpha || 0.04);
+  ctx.lineWidth = S.s(0.5);
+  var spacing = S.s(40);
+  for (var x = 0; x < canvas.width; x += spacing) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+  }
+  for (var y = 0; y < canvas.height; y += spacing) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+  }
+}
+
+function drawNeonBorder() {
+  ctx.strokeStyle = hex2rgba(C.neonCyan, 0.15 + Math.sin(gs.pulseTime) * 0.05);
+  ctx.lineWidth = S.s(2);
+  ctx.strokeRect(S.s(2), S.st, canvas.width - S.s(4), canvas.height - S.st - S.s(2));
+}
+
 // ===== 主菜单 =====
 function renderMenu(){
+  // 背景
   var g=grad(ctx,0,0,0,canvas.height);
   if(g){g.addColorStop(0,'#020510');g.addColorStop(.5,'#0a1035');g.addColorStop(1,'#050a20');ctx.fillStyle=g;}else ctx.fillStyle=C.bg;
-  ctx.fillRect(0,0,canvas.width,canvas.height);drawStars();
+  ctx.fillRect(0,0,canvas.width,canvas.height);
 
-  // 标题
-  ctx.save();ctx.shadowColor=C.neonCyan;ctx.shadowBlur=20;ctx.fillStyle=C.neonCyan;
-  ctx.font='bold '+S.s(32)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.fillText('磁吸拆迁队',canvas.width/2,S.safY(70));ctx.restore();
-  ctx.fillStyle=C.textDim;ctx.font=S.s(11)+'px Arial';ctx.textAlign='center';
-  ctx.fillText('MAGNETIC DEMOLITION TEAM  V'+VERSION,canvas.width/2,S.safY(100));
+  // 科技感网格
+  drawGridLines(0.03);
+  drawScanLine(0.04);
+  drawCachedStars();
+  drawNeonBorder();
+
+  // 入场动画
+  var anim = gs.menuAnim;
+  var titleY = S.safY(65) - (1 - anim) * S.s(30);
+
+  // 标题发光
+  ctx.save();
+  ctx.globalAlpha = anim;
+  ctx.shadowColor=C.neonCyan;ctx.shadowBlur=25*anim;
+  ctx.fillStyle=C.neonCyan;
+  ctx.font='bold '+S.s(34)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText('磁吸拆迁队',canvas.width/2,titleY);
+  ctx.restore();
+
+  // 副标题
+  ctx.save();ctx.globalAlpha=anim;
+  ctx.fillStyle=C.textDim;ctx.font=S.s(10)+'px Arial';ctx.textAlign='center';
+  ctx.fillText('MAGNETIC DEMOLITION TEAM  V'+VERSION,canvas.width/2,titleY+S.s(30));
+  ctx.restore();
+
+  // 脉冲环装饰
+  drawPulseRing(canvas.width/2, titleY, S.s(120), C.neonCyan, 0.06);
 
   // 用户信息
-  if(gs.userInfo || gs.loggedIn){
-    var uname = (gs.userInfo && gs.userInfo.nickName) || '拆迁队员';
-    ctx.fillStyle=C.neonGreen;ctx.font=S.s(12)+'px Arial';ctx.textAlign='center';
-    ctx.fillText('👤 '+uname,canvas.width/2,S.safY(120));
+  ctx.save();ctx.globalAlpha=anim;
+  var uname = (gs.userInfo && gs.userInfo.nickName) || '点击登录';
+  ctx.fillStyle=gs.loggedIn?C.neonGreen:C.neonYellow;
+  ctx.font=S.s(12)+'px Arial';ctx.textAlign='center';
+  ctx.fillText((gs.loggedIn?'● ':'○ ')+uname,canvas.width/2,S.safY(115));
+  if(!gs.loggedIn){
+    regBtn(canvas.width/2-S.s(60),S.safY(100),S.s(120),S.s(25),function(){tryAuthorizeLogin();});
+  }
+  ctx.restore();
+
+  // 每日奖励提示
+  if(!gs.dailyReward){
+    ctx.save();ctx.globalAlpha=anim;
+    ctx.fillStyle=C.neonYellow;ctx.font=S.s(11)+'px Arial';ctx.textAlign='center';
+    var pulse=Math.sin(gs.pulseTime*3)*0.3+0.7;
+    ctx.globalAlpha=anim*pulse;
+    ctx.fillText('🎁 每日奖励待领取 (连续'+gs.loginStreak+'天)',canvas.width/2,S.safY(132));
+    regBtn(canvas.width/2-S.s(80),S.safY(118),S.s(160),S.s(25),function(){
+      var bonus=dailySystem.claim();
+      if(bonus>0){gs.score+=bonus;NPC.show('领取 '+bonus+' 分奖励！连续登录'+gs.loginStreak+'天',120);}
+    });
+    ctx.restore();
   }
 
   // NPC
-  drawNPC(S.sx(20),S.safY(140),S.s(70));
-  if(gs.npcText&&gs.npcTimer>0)drawBubble(S.sx(100),S.safY(135),S.s(240),gs.npcText);
+  ctx.save();ctx.globalAlpha=anim;
+  drawNPC(S.sx(15),S.safY(148),S.s(65));
+  if(gs.npcText&&gs.npcTimer>0)drawBubble(S.sx(85),S.safY(143),S.s(240),gs.npcText);
+  ctx.restore();
 
-  // 按钮
-  var cx=canvas.width/2,bw=S.s(240),bh=S.s(54),sy=S.safY(220);
+  // 按钮 - 科技感风格
+  var cx=canvas.width/2,bw=S.s(250),bh=S.s(52),sy=S.safY(230);
   var lb=['开始游戏','关卡选择','排行榜','玩法说明'];
   var cl=[C.neonGreen,C.neonCyan,C.neonYellow,C.neonPurple];
   var fn=[
@@ -658,423 +894,522 @@ function renderMenu(){
     function(){gs.lbTab='friend';loadFriendScores();loadWorldScores();gs.currentScene='leaderboard';},
     function(){gs.currentScene='instructions';}
   ];
-  for(var i=0;i<lb.length;i++){var by=sy+i*(bh+S.s(14));drawBtn(cx-bw/2,by,bw,bh,lb[i],cl[i]);regBtn(cx-bw/2,by,bw,bh,fn[i]);}
+  for(var i=0;i<lb.length;i++){
+    var by=sy+i*(bh+S.s(12));
+    var btnAnim = Math.max(0, Math.min(1, (anim - i*0.1) * 2));
+    ctx.save();ctx.globalAlpha=btnAnim;
+    drawNeonBtn(cx-bw/2,by,bw,bh,lb[i],cl[i]);
+    regBtn(cx-bw/2,by,bw,bh,fn[i]);
+    ctx.restore();
+  }
+
+  // 底部统计
+  ctx.save();ctx.globalAlpha=anim*0.6;
+  ctx.fillStyle=C.textDim;ctx.font=S.s(10)+'px Arial';ctx.textAlign='center';
+  ctx.fillText('最高L'+progress.highestLevel+' | 总分'+gs.totalScore+' | 最高连击'+gs.maxCombo,canvas.width/2,canvas.height-S.sb-S.s(15));
+  ctx.restore();
+}
+
+// 科技感按钮
+function drawNeonBtn(x,y,w,h,t,c){
+  // 填充
+  ctx.fillStyle=hex2rgba(c,.06);
+  rr(ctx,x,y,w,h,S.s(8));ctx.fill();
+  // 内发光边框
+  ctx.strokeStyle=hex2rgba(c,.5+Math.sin(gs.pulseTime*2)*0.15);
+  ctx.lineWidth=S.s(1.5);
+  rr(ctx,x,y,w,h,S.s(8));ctx.stroke();
+  // 顶部高光线
+  ctx.fillStyle=hex2rgba(c,.15);
+  rr(ctx,x+S.s(2),y+S.s(1),w-S.s(4),S.s(3),S.s(2));ctx.fill();
+  // 文字
+  ctx.fillStyle=c;ctx.font='bold '+S.s(17)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(t,x+w/2,y+h/2);
 }
 
 // ===== 游戏场景 =====
 function renderGame(){
   var g=grad(ctx,0,0,0,canvas.height);
   if(g){g.addColorStop(0,'#020510');g.addColorStop(.6,'#0a1035');g.addColorStop(1,'#0d1540');ctx.fillStyle=g;}else ctx.fillStyle=C.bg;
-  ctx.fillRect(0,0,canvas.width,canvas.height);drawStars();
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  // 轻量网格
+  drawGridLines(0.02);
+  drawScanLine(0.02);
+  drawCachedStars();
+
+  // 地面
   var gy=canvas.height-S.s(50);
   ctx.fillStyle=C.ground;ctx.fillRect(0,gy,canvas.width,S.s(50));
   ctx.strokeStyle=C.groundLine;ctx.lineWidth=S.s(1);ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(canvas.width,gy);ctx.stroke();
+
   drawBuildings();
   drawCrane();
   drawParticles();drawFloats();
+
+  // 慢动作效果
+  if(gs.slowMo>0){
+    ctx.fillStyle='rgba(0,240,255,0.05)';ctx.fillRect(0,0,canvas.width,canvas.height);
+  }
+
   if(gs.flash>.01){ctx.fillStyle='rgba(255,255,255,'+gs.flash+')';ctx.fillRect(0,0,canvas.width,canvas.height);}
   drawHUD();
   if(gs.npcText&&gs.npcTimer>0){drawNPC(S.sx(5),canvas.height-S.s(75),S.s(45));drawBubble(S.sx(55),canvas.height-S.s(65),S.s(230),gs.npcText);}
   if(gs.gamePaused)drawPause();
 }
 
-// ===== 建筑 =====
+// ===== 建筑（优化：减少shadowBlur使用）=====
 function drawBuildings(){
   buildings.forEach(function(b){
     if(b.isDestroyed)return;
     var hp=b.health/b.maxHealth;
     var bc=C[b.type]||C.wood;
-    ctx.save();
-    ctx.shadowColor=bc.glow;
-    ctx.shadowBlur=hp>0.5?8:15;
-    ctx.fillStyle=bc.fill;
-    ctx.fillRect(b.x,b.y,b.width,b.height);
-    ctx.shadowBlur=0;
-    ctx.strokeStyle=bc.stroke;
-    ctx.lineWidth=S.s(2);
-    ctx.strokeRect(b.x,b.y,b.width,b.height);
-    ctx.fillStyle='rgba(255,255,255,0.15)';
-    ctx.fillRect(b.x+2,b.y+2,b.width-4,S.s(4));
+
+    // 仅在低血量时使用shadowBlur（节省GPU）
+    if(hp<0.3){
+      ctx.save();
+      ctx.shadowColor=bc.glow;ctx.shadowBlur=10;
+      ctx.fillStyle=bc.fill;ctx.fillRect(b.x,b.y,b.width,b.height);
+      ctx.restore();
+    } else {
+      ctx.fillStyle=bc.fill;ctx.fillRect(b.x,b.y,b.width,b.height);
+    }
+
+    // 边框
+    ctx.strokeStyle=bc.stroke;ctx.lineWidth=S.s(2);ctx.strokeRect(b.x,b.y,b.width,b.height);
+
+    // 高光
+    ctx.fillStyle='rgba(255,255,255,0.12)';ctx.fillRect(b.x+2,b.y+2,b.width-4,S.s(3));
+
+    // 类型标记
     ctx.font='bold '+S.s(14)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
-    ctx.fillStyle='rgba(255,255,255,0.7)';
+    ctx.fillStyle='rgba(255,255,255,0.65)';
     var label=b.type==='wood'?'木':b.type==='brick'?'砖':b.type==='steel'?'钢':b.type==='ice'?'冰':b.type==='rubber'?'胶':b.type==='tnt'?'TNT':'?';
     ctx.fillText(label,b.x+b.width/2,b.y+b.height/2);
+
+    // 裂纹
     if(hp<0.7){
-      ctx.strokeStyle='rgba(0,0,0,0.5)';ctx.lineWidth=S.s(1.5);
-      var cn=hp<0.3?3:1;
+      ctx.strokeStyle='rgba(0,0,0,0.4)';ctx.lineWidth=S.s(1);
+      var cn=hp<0.3?2:1;
       for(var ci=0;ci<cn;ci++){ctx.beginPath();ctx.moveTo(b.x+b.width*(0.3+ci*0.2),b.y);ctx.lineTo(b.x+b.width*(0.4+ci*0.15),b.y+b.height*0.5);ctx.lineTo(b.x+b.width*(0.2+ci*0.3),b.y+b.height);ctx.stroke();}
     }
-    if(hp<0.3&&frame%20<10){ctx.fillStyle='rgba(255,50,50,0.15)';ctx.fillRect(b.x,b.y,b.width,b.height);}
+
+    // 濒危闪烁（每3帧闪一次，减少重绘）
+    if(hp<0.3&&frame%6<3){ctx.fillStyle='rgba(255,50,50,0.12)';ctx.fillRect(b.x,b.y,b.width,b.height);}
+
+    // 血条
     if(hp<1){
-      var bw2=b.width*.8,bh2=S.s(4),bx2=b.x+(b.width-bw2)/2,by2=b.y-S.s(8);
-      ctx.fillStyle='rgba(0,0,0,0.5)';ctx.fillRect(bx2,by2,bw2,bh2);
+      var bw2=b.width*.8,bh2=S.s(3),bx2=b.x+(b.width-bw2)/2,by2=b.y-S.s(7);
+      ctx.fillStyle='rgba(0,0,0,0.4)';ctx.fillRect(bx2,by2,bw2,bh2);
       ctx.fillStyle=hp>.5?C.neonGreen:hp>.25?C.neonYellow:C.neonRed;
       ctx.fillRect(bx2,by2,bw2*hp,bh2);
     }
-    ctx.restore();
   });
 }
 
-// ===== 起重机 =====
+// ===== 起重机（优化shadow使用）=====
 function drawCrane(){
   if(!crane)return;
   var cx=crane.crane.x,cy=crane.crane.y,cw=crane.crane.width,ch=crane.crane.height;
-  ctx.save();
-  ctx.strokeStyle='rgba(0,240,255,0.1)';ctx.lineWidth=S.s(1);ctx.setLineDash&&ctx.setLineDash([5,5]);
+  // 轨道
+  ctx.strokeStyle='rgba(0,240,255,0.08)';ctx.lineWidth=S.s(1);
+  ctx.setLineDash&&ctx.setLineDash([5,5]);
   ctx.beginPath();ctx.moveTo(0,cy+ch);ctx.lineTo(canvas.width,cy+ch);ctx.stroke();
   ctx.setLineDash&&ctx.setLineDash([]);
+
+  // 主体
   ctx.fillStyle='#2a3b5e';rr(ctx,cx-cw/2,cy,cw,ch,S.s(4));ctx.fill();
-  ctx.strokeStyle=C.neonCyan;ctx.lineWidth=S.s(1.5);ctx.shadowColor=C.neonCyan;ctx.shadowBlur=6;
-  rr(ctx,cx-cw/2,cy,cw,ch,S.s(4));ctx.stroke();ctx.shadowBlur=0;
+  ctx.strokeStyle=C.neonCyan;ctx.lineWidth=S.s(1.5);
+  rr(ctx,cx-cw/2,cy,cw,ch,S.s(4));ctx.stroke();
+
+  // 窗
   ctx.fillStyle=hex2rgba(C.neonCyan,.3);ctx.fillRect(cx-S.s(10),cy+S.s(10),S.s(20),S.s(14));
+
+  // 绳索
   var px=cx,py=cy+ch,mx=crane.magnet.x,my=crane.magnet.y;
-  ctx.strokeStyle='rgba(0,240,255,0.5)';ctx.lineWidth=S.s(2);
+  ctx.strokeStyle='rgba(0,240,255,0.4)';ctx.lineWidth=S.s(2);
   ctx.beginPath();ctx.moveTo(px,py);ctx.lineTo(mx,my);ctx.stroke();
+
+  // 磁铁
   drawMag(mx,my);
-  ctx.restore();
 }
 
 function drawMag(mx,my){
   var grabbing=crane.isGrabbing(),r=crane.magnet.radius,ar=crane.magnet.attractRadius;
   var p=Math.sin(gs.pulse)*.3+.7;
-  ctx.save();
+  // 范围指示（简化：只画1圈）
   if(crane.magnet.isActive||grabbing){
-    for(var i=3;i>=1;i--){ctx.strokeStyle=hex2rgba(C.neonCyan,.04*(4-i));ctx.lineWidth=S.s(1);ctx.beginPath();ctx.arc(mx,my,ar*(i/3)*p,0,Math.PI*2);ctx.stroke();}
+    ctx.strokeStyle=hex2rgba(C.neonCyan,.08*p);ctx.lineWidth=S.s(1);
+    ctx.beginPath();ctx.arc(mx,my,ar*p,0,Math.PI*2);ctx.stroke();
   }
-  ctx.shadowColor=grabbing?C.neonGreen:C.neonCyan;ctx.shadowBlur=20*p;
-  ctx.lineWidth=S.s(5);ctx.strokeStyle=grabbing?C.neonGreen:C.neonCyan;
-  ctx.beginPath();ctx.arc(mx,my,r,0,Math.PI);ctx.stroke();
-  ctx.beginPath();ctx.moveTo(mx-r,my);ctx.lineTo(mx-r,my-S.s(8));ctx.stroke();
-  ctx.beginPath();ctx.moveTo(mx+r,my);ctx.lineTo(mx+r,my-S.s(8));ctx.stroke();
-  ctx.beginPath();ctx.arc(mx,my,r*.7,0,Math.PI*2);ctx.fillStyle=hex2rgba(grabbing?C.neonGreen:C.neonCyan,.3*p);ctx.fill();
-  ctx.shadowBlur=0;
+  // U形磁铁（仅抓取时发光）
+  if(grabbing){
+    ctx.save();ctx.shadowColor=C.neonGreen;ctx.shadowBlur=12;
+    ctx.lineWidth=S.s(5);ctx.strokeStyle=C.neonGreen;
+    ctx.beginPath();ctx.arc(mx,my,r,0,Math.PI);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(mx-r,my);ctx.lineTo(mx-r,my-S.s(8));ctx.stroke();
+    ctx.beginPath();ctx.moveTo(mx+r,my);ctx.lineTo(mx+r,my-S.s(8));ctx.stroke();
+    ctx.restore();
+  } else {
+    ctx.lineWidth=S.s(5);ctx.strokeStyle=C.neonCyan;
+    ctx.beginPath();ctx.arc(mx,my,r,0,Math.PI);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(mx-r,my);ctx.lineTo(mx-r,my-S.s(8));ctx.stroke();
+    ctx.beginPath();ctx.moveTo(mx+r,my);ctx.lineTo(mx+r,my-S.s(8));ctx.stroke();
+  }
+  // 核心
+  ctx.beginPath();ctx.arc(mx,my,r*.7,0,Math.PI*2);ctx.fillStyle=hex2rgba(grabbing?C.neonGreen:C.neonCyan,.2*p);ctx.fill();
+  // 电弧（简化：只画1条）
   if(grabbing&&crane.magnet.grabbedBlock){
     var blk=crane.magnet.grabbedBlock;
-    ctx.strokeStyle=C.neonYellow;ctx.lineWidth=S.s(1.5);ctx.shadowColor=C.neonYellow;ctx.shadowBlur=8;
-    for(var si=-1;si<=1;si++){ctx.beginPath();ctx.moveTo(mx+si*S.s(6),my+r);
-      ctx.quadraticCurveTo(mx+si*S.s(6)+(Math.random()-.5)*S.s(12),(my+blk.y)/2,blk.x+blk.width/2+si*S.s(8),blk.y);ctx.stroke();}
-    ctx.shadowBlur=0;
+    ctx.strokeStyle=C.neonYellow;ctx.lineWidth=S.s(1.5);
+    ctx.beginPath();ctx.moveTo(mx,my+r);
+    ctx.quadraticCurveTo(mx+(Math.random()-.5)*S.s(10),(my+blk.y)/2,blk.x+blk.width/2,blk.y);
+    ctx.stroke();
   }
-  ctx.restore();
 }
 
-function drawParticles(){particles.forEach(function(p){var a=p.life/p.ml;ctx.save();if(p.t==='debris'){ctx.translate(p.x,p.y);ctx.rotate(p.rot||0);ctx.fillStyle=hex2rgba(p.color,a);ctx.fillRect(-p.sz/2,-p.sz/2,p.sz,p.sz);}else{ctx.fillStyle=hex2rgba(p.color,a);ctx.shadowColor=p.color;ctx.shadowBlur=4;ctx.beginPath();ctx.arc(p.x,p.y,p.sz*a,0,Math.PI*2);ctx.fill();}ctx.restore();});}
-function drawFloats(){floats.forEach(function(f){var a=f.life/45;ctx.save();ctx.globalAlpha=a;ctx.fillStyle=f.c;ctx.font='bold '+S.s(22)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.shadowColor=f.c;ctx.shadowBlur=10;ctx.fillText(f.t,f.x,f.y);if(gs.combo>1&&f.t[0]==='+'){ctx.font=S.s(13)+'px Arial';ctx.fillText(gs.combo+'x',f.x,f.y-S.s(16));}ctx.restore();});}
+function drawParticles(){
+  for(var i=0;i<particles.length;i++){
+    var p=particles[i],a=p.life/p.ml;
+    if(p.t==='debris'){
+      ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.rot||0);
+      ctx.fillStyle=hex2rgba(p.color,a);ctx.fillRect(-p.sz/2,-p.sz/2,p.sz,p.sz);
+      ctx.restore();
+    }else{
+      ctx.fillStyle=hex2rgba(p.color,a);
+      ctx.beginPath();ctx.arc(p.x,p.y,p.sz*a,0,Math.PI*2);ctx.fill();
+    }
+  }
+}
+
+function drawFloats(){
+  for(var i=0;i<floats.length;i++){
+    var f=floats[i],a=f.life/45;
+    ctx.save();ctx.globalAlpha=a;ctx.fillStyle=f.c;ctx.font='bold '+S.s(22)+'px Arial';
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(f.t,f.x,f.y);
+    ctx.restore();
+  }
+}
 
 // ===== HUD =====
 function drawHUD(){
-  var th=S.s(38),ty=S.st;
+  var th=S.s(36),ty=S.st;
   ctx.fillStyle=C.panelBg;ctx.fillRect(0,ty,canvas.width,th);
   ctx.strokeStyle=C.panelBorder;ctx.lineWidth=S.s(1);ctx.beginPath();ctx.moveTo(0,ty+th);ctx.lineTo(canvas.width,ty+th);ctx.stroke();
-  var fs=S.s(15),my=ty+th/2;
+  var fs=S.s(14),my=ty+th/2;
   ctx.font='bold '+fs+'px Arial';ctx.textBaseline='middle';
   ctx.fillStyle=C.neonGreen;ctx.textAlign='left';ctx.fillText('分数:'+gs.score,S.sx(70),my);
   ctx.fillStyle=gs.timeLeft<=10?C.neonRed:C.neonCyan;ctx.textAlign='center';ctx.fillText(gs.timeLeft+'s',canvas.width/2,my);
   ctx.fillStyle=C.neonYellow;ctx.textAlign='right';ctx.fillText('L'+gs.currentLevel+' 目标'+gs.targetScore,canvas.width-S.sx(70),my);
-  var bx=S.sx(5),by2=ty+S.s(3),bw=S.s(58),bh=S.s(32);
-  ctx.fillStyle='rgba(0,240,255,0.1)';rr(ctx,bx,by2,bw,bh,S.s(4));ctx.fill();
-  ctx.strokeStyle=hex2rgba(C.neonCyan,.4);ctx.lineWidth=S.s(.5);rr(ctx,bx,by2,bw,bh,S.s(4));ctx.stroke();
-  ctx.fillStyle=C.neonCyan;ctx.font=S.s(12)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('菜单',bx+bw/2,by2+bh/2);
+
+  // 菜单
+  var bx=S.sx(5),by2=ty+S.s(2),bw=S.s(56),bh=S.s(30);
+  ctx.fillStyle='rgba(0,240,255,0.08)';rr(ctx,bx,by2,bw,bh,S.s(4));ctx.fill();
+  ctx.strokeStyle=hex2rgba(C.neonCyan,.3);ctx.lineWidth=S.s(.5);rr(ctx,bx,by2,bw,bh,S.s(4));ctx.stroke();
+  ctx.fillStyle=C.neonCyan;ctx.font=S.s(11)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('菜单',bx+bw/2,by2+bh/2);
   regBtn(bx,by2,bw,bh,function(){gs.currentScene='menu';clearTimer();gs.gameActive=false;});
-  var px=canvas.width-S.sx(58),py=ty+S.s(3),pw=S.s(50),ph=S.s(32);
-  ctx.fillStyle='rgba(0,240,255,0.1)';rr(ctx,px,py,pw,ph,S.s(4));ctx.fill();
-  ctx.strokeStyle=hex2rgba(C.neonCyan,.4);ctx.lineWidth=S.s(.5);rr(ctx,px,py,pw,ph,S.s(4));ctx.stroke();
-  ctx.fillStyle=C.neonCyan;ctx.font=S.s(12)+'px Arial';ctx.textAlign='center';ctx.fillText(gs.gamePaused?'继续':'暂停',px+pw/2,py+ph/2);
+
+  // 暂停
+  var px=canvas.width-S.sx(56),py=ty+S.s(2),pw=S.s(48),ph=S.s(30);
+  ctx.fillStyle='rgba(0,240,255,0.08)';rr(ctx,px,py,pw,ph,S.s(4));ctx.fill();
+  ctx.strokeStyle=hex2rgba(C.neonCyan,.3);ctx.lineWidth=S.s(.5);rr(ctx,px,py,pw,ph,S.s(4));ctx.stroke();
+  ctx.fillStyle=C.neonCyan;ctx.font=S.s(11)+'px Arial';ctx.textAlign='center';ctx.fillText(gs.gamePaused?'继续':'暂停',px+pw/2,py+ph/2);
   regBtn(px,py,pw,ph,function(){gs.gamePaused=!gs.gamePaused;});
-  if(gs.gameActive&&!gs.gamePaused){var el=bg.getTimeLimit(gs.currentLevel)-gs.timeLeft;
-    if(el<4){ctx.fillStyle=hex2rgba(C.neonCyan,Math.max(0,1-el/4));ctx.font=S.s(14)+'px Arial';ctx.textAlign='center';ctx.fillText('点击方块抓取 → 滑动甩动 → 再点释放',canvas.width/2,canvas.height-S.s(20));}}
+
+  // 连击显示
+  if(gs.combo>=2){
+    ctx.fillStyle=C.neonPurple;ctx.font='bold '+S.s(16)+'px Arial';ctx.textAlign='center';
+    ctx.fillText(gs.combo+'x COMBO',canvas.width/2,ty+th+S.s(18));
+  }
+
+  if(gs.gameActive&&!gs.gamePaused){
+    var el=bg.getTimeLimit(gs.currentLevel)-gs.timeLeft;
+    if(el<4){ctx.fillStyle=hex2rgba(C.neonCyan,Math.max(0,1-el/4));ctx.font=S.s(13)+'px Arial';ctx.textAlign='center';ctx.fillText('点击抓取 → 滑动甩动 → 再点释放',canvas.width/2,canvas.height-S.s(18));}
+  }
 }
 
-function drawPause(){ctx.fillStyle='rgba(5,10,30,0.85)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.save();ctx.shadowColor=C.neonCyan;ctx.shadowBlur=15;ctx.fillStyle=C.neonCyan;ctx.font='bold '+S.s(32)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('游戏暂停',canvas.width/2,canvas.height/2);ctx.restore();}
+function drawPause(){
+  ctx.fillStyle='rgba(5,10,30,0.85)';ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle=C.neonCyan;ctx.font='bold '+S.s(32)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText('游戏暂停',canvas.width/2,canvas.height/2-S.s(20));
+  ctx.fillStyle=C.textDim;ctx.font=S.s(14)+'px Arial';
+  ctx.fillText('点击「继续」恢复游戏',canvas.width/2,canvas.height/2+S.s(20));
+}
 
 // ===== 结算 =====
 function renderGameOver(){
   ctx.fillStyle='rgba(5,10,30,0.9)';ctx.fillRect(0,0,canvas.width,canvas.height);
-  var cx=canvas.width/2,bw=S.s(300),bh=S.s(300),bx=(canvas.width-bw)/2,by=(canvas.height-bh)/2;
-  ctx.fillStyle=C.panelBg;ctx.strokeStyle=C.panelBorder;ctx.lineWidth=S.s(1.5);rr(ctx,bx,by,bw,bh,S.s(12));ctx.fill();rr(ctx,bx,by,bw,bh,S.s(12));ctx.stroke();
+  var cx=canvas.width/2,bw=S.s(300),bh=S.s(320),bx=(canvas.width-bw)/2,by=(canvas.height-bh)/2;
+  ctx.fillStyle=C.panelBg;ctx.strokeStyle=C.panelBorder;ctx.lineWidth=S.s(1.5);
+  rr(ctx,bx,by,bw,bh,S.s(12));ctx.fill();rr(ctx,bx,by,bw,bh,S.s(12));ctx.stroke();
+
   var win=gs.score>=gs.targetScore;
-  ctx.save();ctx.shadowColor=win?C.neonGreen:C.neonRed;ctx.shadowBlur=15;ctx.fillStyle=win?C.neonGreen:C.neonRed;
-  ctx.font='bold '+S.s(26)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(win?'关卡通过!':'时间到!',cx,by+S.s(45));ctx.restore();
+  ctx.fillStyle=win?C.neonGreen:C.neonRed;ctx.font='bold '+S.s(26)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(win?'关卡通过!':'时间到!',cx,by+S.s(40));
 
-  // 星级显示
-  var starY=by+S.s(75);
+  // 星级
+  var starY=by+S.s(70);
   for(var si=0;si<3;si++){
-    ctx.font=S.s(30)+'px Arial';ctx.textAlign='center';
+    ctx.font=S.s(32)+'px Arial';ctx.textAlign='center';
     ctx.fillStyle=si<gs.stars?C.neonYellow:C.textDim;
-    ctx.fillText('★',cx-S.s(35)+si*S.s(35),starY);
+    ctx.fillText(si<gs.stars?'★':'☆',cx-S.s(30)+si*S.s(30),starY);
   }
 
-  ctx.fillStyle=C.textMain;ctx.font=S.s(18)+'px Arial';ctx.textAlign='center';ctx.fillText('得分: '+gs.score,cx,by+S.s(115));ctx.fillStyle=C.textDim;ctx.fillText('目标: '+gs.targetScore,cx,by+S.s(140));
+  ctx.fillStyle=C.textMain;ctx.font=S.s(18)+'px Arial';ctx.textAlign='center';
+  ctx.fillText('得分: '+gs.score,cx,by+S.s(110));
+  ctx.fillStyle=C.textDim;ctx.fillText('目标: '+gs.targetScore,cx,by+S.s(138));
 
-  // 当前关卡玩法
-  var mc = getMechanicForLevel(gs.currentLevel);
-  ctx.fillStyle=mc.color;ctx.font=S.s(12)+'px Arial';ctx.textAlign='center';
-  ctx.fillText('L'+gs.currentLevel+' ['+mc.name+'] '+mc.desc,cx,by+S.s(165));
+  var mc=getMechanicForLevel(gs.currentLevel);
+  ctx.fillStyle=mc.color;ctx.font=S.s(11)+'px Arial';ctx.textAlign='center';
+  ctx.fillText('L'+gs.currentLevel+' ['+mc.name+'] '+mc.desc,cx,by+S.s(162));
 
-  var bw2=S.s(130),bh2=S.s(52),by2=by+bh-S.s(85);
-  drawBtn(cx-bw2-S.s(10),by2,bw2,bh2,'重玩',C.neonRed);regBtn(cx-bw2-S.s(10),by2,bw2,bh2,function(){loadLevel(gs.currentLevel);});
-  if(win && gs.currentLevel<1000){
-    drawBtn(cx+S.s(10),by2,bw2,bh2,'下一关',C.neonGreen);regBtn(cx+S.s(10),by2,bw2,bh2,function(){gs.currentLevel++;loadLevel(gs.currentLevel);});
+  var bw2=S.s(130),bh2=S.s(50),by2=by+bh-S.s(90);
+  drawNeonBtn(cx-bw2-S.s(8),by2,bw2,bh2,'重玩',C.neonRed);
+  regBtn(cx-bw2-S.s(8),by2,bw2,bh2,function(){loadLevel(gs.currentLevel);});
+  if(win&&gs.currentLevel<1000){
+    drawNeonBtn(cx+S.s(8),by2,bw2,bh2,'下一关',C.neonGreen);
+    regBtn(cx+S.s(8),by2,bw2,bh2,function(){gs.currentLevel++;loadLevel(gs.currentLevel);});
   }
-  drawBtn(cx-bw2/2,by2+bh2+S.s(12),bw2,bh2,'返回主菜单',C.textDim);regBtn(cx-bw2/2,by2+bh2+S.s(12),bw2,bh2,function(){gs.currentScene='menu';});
-  drawNPC(bx+S.s(5),by+bh-S.s(60),S.s(50));
+  drawNeonBtn(cx-bw2/2,by2+bh2+S.s(10),bw2,bh2,'返回主菜单',C.textDim);
+  regBtn(cx-bw2/2,by2+bh2+S.s(10),bw2,bh2,function(){gs.currentScene='menu';});
+  drawNPC(bx+S.s(5),by+bh-S.s(55),S.s(45));
 }
 
-// ===== 关卡选择（1000关分页版）=====
+// ===== 关卡选择（全新UI）=====
 function renderLevelSel(){
-  ctx.fillStyle=C.bg;ctx.fillRect(0,0,canvas.width,canvas.height);drawStars();
+  // 背景
+  ctx.fillStyle=C.bg;ctx.fillRect(0,0,canvas.width,canvas.height);
+  drawGridLines(0.02);
+  drawCachedStars();
+  drawScanLine(0.03);
+  drawNeonBorder();
 
   // 标题
-  ctx.save();ctx.shadowColor=C.neonCyan;ctx.shadowBlur=12;ctx.fillStyle=C.neonCyan;
-  ctx.font='bold '+S.s(26)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.fillText('关卡选择',canvas.width/2,S.safY(40));ctx.restore();
+  ctx.fillStyle=C.neonCyan;ctx.font='bold '+S.s(24)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText('关卡选择',canvas.width/2,S.safY(35));
 
   // 版本
-  ctx.fillStyle=C.textDim;ctx.font=S.s(10)+'px Arial';ctx.textAlign='right';
-  ctx.fillText('V'+VERSION,canvas.width-S.sx(10),S.safY(10));
+  ctx.fillStyle=C.textDim;ctx.font=S.s(9)+'px Arial';ctx.textAlign='right';
+  ctx.fillText('V'+VERSION,canvas.width-S.sx(8),S.safY(8));
 
-  // 当前玩法提示
-  var curMc = getMechanicForLevel(progress.highestLevel);
-  ctx.fillStyle=curMc.color;ctx.font=S.s(12)+'px Arial';ctx.textAlign='center';
-  ctx.fillText('最新解锁: L'+progress.highestLevel+' ['+curMc.name+']',canvas.width/2,S.safY(65));
+  // 当前机制
+  var curMc=getMechanicForLevel(progress.highestLevel);
+  ctx.fillStyle=curMc.color;ctx.font=S.s(11)+'px Arial';ctx.textAlign='center';
+  ctx.fillText('已解锁: L'+progress.highestLevel+' ['+curMc.name+'] '+curMc.desc,canvas.width/2,S.safY(58));
 
-  // 关卡网格 - 5列4行 = 20关/页
-  var cols=5, rows=4, perPage=cols*rows;
+  // 关卡网格 - 5列4行
+  var cols=5,rows=4,perPage=cols*rows;
   var totalPage=Math.ceil(1000/perPage);
   var page=gs.levelPage;
-  if(page<0)page=0;if(page>=totalPage)page=totalPage-1;
-  gs.levelPage=page;
+  if(page<0)page=0;if(page>=totalPage)page=totalPage-1;gs.levelPage=page;
 
-  var cellW=S.s(62), cellH=S.s(62), gap=S.s(6);
-  var gridW=cols*cellW+(cols-1)*gap;
+  var cellW=S.s(58),cellH=S.s(58),gapX=S.s(8),gapY=S.s(8);
+  var gridW=cols*cellW+(cols-1)*gapX;
   var startX=(canvas.width-gridW)/2;
-  var startY=S.safY(85);
+  var startY=S.safY(78);
 
   for(var r=0;r<rows;r++){
     for(var c=0;c<cols;c++){
       var idx=r*cols+c;
       var lv=page*perPage+idx+1;
-      if(lv>1000) continue;
+      if(lv>1000)continue;
 
-      var x=startX+c*(cellW+gap);
-      var y=startY+r*(cellH+gap);
+      var x=startX+c*(cellW+gapX);
+      var y=startY+r*(cellH+gapY);
       var unlocked=progress.isUnlocked(lv);
       var stars=progress.getStars(lv);
       var mc=getMechanicForLevel(lv);
 
-      // 背景
-      ctx.save();
       if(unlocked){
-        ctx.fillStyle=hex2rgba(mc.color,0.15);
-        rr(ctx,x,y,cellW,cellH,S.s(6));ctx.fill();
-        ctx.strokeStyle=hex2rgba(mc.color,0.6);
-        ctx.lineWidth=S.s(1.5);
-        rr(ctx,x,y,cellW,cellH,S.s(6));ctx.stroke();
+        // 科技感卡片
+        ctx.fillStyle=hex2rgba(mc.color,0.08);
+        rr(ctx,x,y,cellW,cellH,S.s(8));ctx.fill();
 
-        // 新玩法标记
+        // 新玩法标记 - 顶部彩条
         if(lv===mc.level){
-          ctx.fillStyle=mc.color;ctx.font='bold '+S.s(8)+'px Arial';ctx.textAlign='center';
-          ctx.fillText('NEW',x+cellW/2,y+S.s(8));
+          ctx.fillStyle=mc.color;
+          rr(ctx,x,y,cellW,S.s(4),S.s(3));ctx.fill();
         }
 
+        // 边框
+        ctx.strokeStyle=hex2rgba(mc.color,0.4+Math.sin(gs.pulseTime*2)*0.1);
+        ctx.lineWidth=S.s(1);
+        rr(ctx,x,y,cellW,cellH,S.s(8));ctx.stroke();
+
         // 关卡号
-        ctx.fillStyle=C.textMain;ctx.font='bold '+S.s(18)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
-        ctx.fillText(lv,x+cellW/2,y+cellH/2);
+        ctx.fillStyle=C.textMain;ctx.font='bold '+S.s(17)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+        ctx.fillText(lv,x+cellW/2,y+cellH/2-S.s(3));
 
         // 星级
         if(stars>0){
-          ctx.fillStyle=C.neonYellow;ctx.font=S.s(10)+'px Arial';ctx.textAlign='center';
+          ctx.fillStyle=C.neonYellow;ctx.font=S.s(9)+'px Arial';ctx.textAlign='center';
           var starStr='';for(var si=0;si<stars;si++)starStr+='★';
           ctx.fillText(starStr,x+cellW/2,y+cellH-S.s(6));
+        }else{
+          // 未通关但已解锁 - 小点
+          ctx.fillStyle=C.textDim;ctx.font=S.s(8)+'px Arial';ctx.textAlign='center';
+          ctx.fillText('●',x+cellW/2,y+cellH-S.s(6));
         }
 
-        // 注册按钮
-        (function(lvNum){
-          regBtn(x,y,cellW,cellH,function(){
-            gs.currentLevel=lvNum;
-            loadLevel(lvNum);
-          });
-        })(lv);
+        (function(lvNum){regBtn(x,y,cellW,cellH,function(){gs.currentLevel=lvNum;loadLevel(lvNum);});})(lv);
       } else {
-        // 锁定状态
-        ctx.fillStyle='rgba(40,45,70,0.5)';
-        rr(ctx,x,y,cellW,cellH,S.s(6));ctx.fill();
-        ctx.strokeStyle='rgba(80,90,120,0.3)';
+        // 锁定
+        ctx.fillStyle='rgba(20,25,45,0.6)';
+        rr(ctx,x,y,cellW,cellH,S.s(8));ctx.fill();
+        ctx.strokeStyle='rgba(60,70,100,0.2)';
         ctx.lineWidth=S.s(1);
-        rr(ctx,x,y,cellW,cellH,S.s(6));ctx.stroke();
-        ctx.fillStyle=C.textDim;ctx.font=S.s(20)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+        rr(ctx,x,y,cellW,cellH,S.s(8));ctx.stroke();
+        ctx.fillStyle='rgba(100,110,140,0.4)';ctx.font=S.s(16)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
         ctx.fillText('🔒',x+cellW/2,y+cellH/2);
       }
-      ctx.restore();
     }
   }
 
-  // 页码信息
-  var pageY=startY+rows*(cellH+gap)+S.s(8);
-  ctx.fillStyle=C.textDim;ctx.font=S.s(13)+'px Arial';ctx.textAlign='center';
-  ctx.fillText('第 '+(page+1)+' / '+totalPage+' 页  (关卡 '+(page*perPage+1)+'-'+Math.min((page+1)*perPage,1000)+')',canvas.width/2,pageY);
+  // 页码 + 翻页
+  var navY=startY+rows*(cellH+gapY)+S.s(6);
 
-  // 翻页按钮
-  var btnW=S.s(60),btnH=S.s(38),btnY=pageY+S.s(12);
-  // 上一页
+  // 翻页按钮 - 大尺寸触控友好
+  var navBtnW=S.s(48),navBtnH=S.s(36),navGap=S.s(12);
+
   if(page>0){
-    drawBtn(S.sx(30),btnY,btnW,btnH,'◀ 上一页',C.neonCyan);
-    regBtn(S.sx(30),btnY,btnW,btnH,function(){gs.levelPage--;});
+    drawNeonBtn(canvas.width/2-navGap/2-navBtnW-S.s(80),navY,navBtnW,navBtnH,'◀',C.neonCyan);
+    regBtn(canvas.width/2-navGap/2-navBtnW-S.s(80),navY,navBtnW,navBtnH,function(){gs.levelPage--;});
   }
-  // 下一页
   if(page<totalPage-1){
-    drawBtn(canvas.width-S.sx(30)-btnW,btnY,btnW,btnH,'下一页 ▶',C.neonCyan);
-    regBtn(canvas.width-S.sx(30)-btnW,btnY,btnW,btnH,function(){gs.levelPage++;});
+    drawNeonBtn(canvas.width/2+navGap/2+S.s(80),navY,navBtnW,navBtnH,'▶',C.neonCyan);
+    regBtn(canvas.width/2+navGap/2+S.s(80),navY,navBtnW,navBtnH,function(){gs.levelPage++;});
   }
 
-  // 跳转到最新关卡
-  var jumpY=btnY+btnH+S.s(8);
-  var jumpW=S.s(200),jumpH=S.s(36);
-  drawBtn((canvas.width-jumpW)/2,jumpY,jumpW,jumpH,'跳到最新 L'+progress.highestLevel,C.neonGreen);
+  // 页码
+  ctx.fillStyle=C.textDim;ctx.font=S.s(12)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText((page+1)+' / '+totalPage,canvas.width/2,navY+navBtnH/2);
+
+  // 快捷跳转
+  var jumpY=navY+navBtnH+S.s(10);
+  var jumpW=S.s(180),jumpH=S.s(34);
+  drawNeonBtn((canvas.width-jumpW)/2,jumpY,jumpW,jumpH,'跳到最新 L'+progress.highestLevel,C.neonGreen);
   regBtn((canvas.width-jumpW)/2,jumpY,jumpW,jumpH,function(){gs.levelPage=Math.floor((progress.highestLevel-1)/perPage);});
 
-  // 返回主菜单
-  var backY=canvas.height-S.sy(70);
-  var backW=S.s(280);
-  drawBtn((canvas.width-backW)/2,backY,backW,S.s(50),'返回主菜单',C.neonRed);
-  regBtn((canvas.width-backW)/2,backY,backW,S.s(50),function(){gs.currentScene='menu';});
+  // 返回
+  var backY=canvas.height-S.sb-S.s(55);
+  var backW=S.s(250);
+  drawNeonBtn((canvas.width-backW)/2,backY,backW,S.s(46),'返回主菜单',C.neonRed);
+  regBtn((canvas.width-backW)/2,backY,backW,S.s(46),function(){gs.currentScene='menu';});
 }
 
-// ===== 排行榜（好友+世界）=====
+// ===== 排行榜 =====
 function renderLB(){
-  ctx.fillStyle=C.bg;ctx.fillRect(0,0,canvas.width,canvas.height);drawStars();
+  ctx.fillStyle=C.bg;ctx.fillRect(0,0,canvas.width,canvas.height);
+  drawCachedStars();drawScanLine(0.02);drawNeonBorder();
 
-  // 标题
-  ctx.save();ctx.shadowColor=C.neonYellow;ctx.shadowBlur=12;ctx.fillStyle=C.neonYellow;
-  ctx.font='bold '+S.s(26)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.fillText('排行榜',canvas.width/2,S.safY(40));ctx.restore();
+  ctx.fillStyle=C.neonYellow;ctx.font='bold '+S.s(24)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText('排行榜',canvas.width/2,S.safY(35));
 
-  // Tab切换
-  var tabW=S.s(130),tabH=S.s(38),tabY=S.safY(70);
-  var tabCx=canvas.width/2;
-
-  // 好友Tab
-  ctx.fillStyle=gs.lbTab==='friend'?hex2rgba(C.neonCyan,0.2):'rgba(30,35,60,0.5)';
+  // Tab
+  var tabW=S.s(120),tabH=S.s(36),tabY=S.safY(60),tabCx=canvas.width/2;
+  // 好友
+  ctx.fillStyle=gs.lbTab==='friend'?hex2rgba(C.neonCyan,0.15):'rgba(20,25,45,0.5)';
   rr(ctx,tabCx-tabW-S.s(3),tabY,tabW,tabH,S.s(6));ctx.fill();
-  ctx.strokeStyle=gs.lbTab==='friend'?C.neonCyan:'rgba(80,90,120,0.3)';
-  ctx.lineWidth=gs.lbTab==='friend'?S.s(2):S.s(1);
+  ctx.strokeStyle=gs.lbTab==='friend'?C.neonCyan:'rgba(60,70,100,0.3)';
+  ctx.lineWidth=gs.lbTab==='friend'?S.s(1.5):S.s(1);
   rr(ctx,tabCx-tabW-S.s(3),tabY,tabW,tabH,S.s(6));ctx.stroke();
   ctx.fillStyle=gs.lbTab==='friend'?C.neonCyan:C.textDim;
-  ctx.font='bold '+S.s(15)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.font='bold '+S.s(14)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
   ctx.fillText('好友排行',tabCx-tabW/2-S.s(3),tabY+tabH/2);
   regBtn(tabCx-tabW-S.s(3),tabY,tabW,tabH,function(){gs.lbTab='friend';loadFriendScores();});
 
-  // 世界Tab
-  ctx.fillStyle=gs.lbTab==='world'?hex2rgba(C.neonYellow,0.2):'rgba(30,35,60,0.5)';
+  // 世界
+  ctx.fillStyle=gs.lbTab==='world'?hex2rgba(C.neonYellow,0.15):'rgba(20,25,45,0.5)';
   rr(ctx,tabCx+S.s(3),tabY,tabW,tabH,S.s(6));ctx.fill();
-  ctx.strokeStyle=gs.lbTab==='world'?C.neonYellow:'rgba(80,90,120,0.3)';
-  ctx.lineWidth=gs.lbTab==='world'?S.s(2):S.s(1);
+  ctx.strokeStyle=gs.lbTab==='world'?C.neonYellow:'rgba(60,70,100,0.3)';
+  ctx.lineWidth=gs.lbTab==='world'?S.s(1.5):S.s(1);
   rr(ctx,tabCx+S.s(3),tabY,tabW,tabH,S.s(6));ctx.stroke();
   ctx.fillStyle=gs.lbTab==='world'?C.neonYellow:C.textDim;
-  ctx.font='bold '+S.s(15)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.font='bold '+S.s(14)+'px Arial';ctx.textAlign='center';
   ctx.fillText('世界排行',tabCx+tabW/2+S.s(3),tabY+tabH/2);
   regBtn(tabCx+S.s(3),tabY,tabW,tabH,function(){gs.lbTab='world';loadWorldScores();});
 
-  // 排行列表
-  var listY=tabY+tabH+S.s(15);
-  var itemH=S.s(38);
+  var listY=tabY+tabH+S.s(12),itemH=S.s(36);
 
   if(gs.lbTab==='friend'){
-    // 好友排行
-    // 尝试渲染开放数据域画布
     if(openDataContext){
-      try {
-        var sharedCanvas = openDataContext.canvas;
-        if(sharedCanvas){
-          ctx.drawImage(sharedCanvas, 0, listY, canvas.width, canvas.height - listY - S.s(80));
-        }
-      } catch(e) {}
+      try{var sharedCanvas=openDataContext.canvas;if(sharedCanvas)ctx.drawImage(sharedCanvas,0,listY,canvas.width,canvas.height-listY-S.s(80));}catch(e){}
     }
-
-    // 备用：本地排行数据
     var lb=[];try{var d=wx.getStorageSync('leaderboard');if(d)lb=JSON.parse(d);}catch(e){}
     if(!lb.length){
-      ctx.fillStyle=C.textDim;ctx.font=S.s(15)+'px Arial';ctx.textAlign='center';
-      ctx.fillText('暂无好友记录',canvas.width/2,listY+S.s(80));
-      ctx.font=S.s(12)+'px Arial';
-      ctx.fillText('完成关卡后分数将自动上传',canvas.width/2,listY+S.s(110));
-    } else {
+      ctx.fillStyle=C.textDim;ctx.font=S.s(14)+'px Arial';ctx.textAlign='center';
+      ctx.fillText('暂无好友记录',canvas.width/2,listY+S.s(60));
+    }else{
       var ms=[C.neonYellow,'#C0C0C0','#CD7F32'];
       for(var i=0;i<Math.min(lb.length,10);i++){
         var iy=listY+i*itemH;
-        ctx.fillStyle=i<3?hex2rgba(ms[i],0.08):'rgba(30,35,60,0.3)';
-        ctx.fillRect(S.sx(20),iy,canvas.width-S.sx(40),itemH-S.s(4));
-        ctx.fillStyle=i<3?ms[i]:C.textDim;ctx.font='bold '+S.s(15)+'px Arial';ctx.textAlign='left';ctx.textBaseline='middle';
+        ctx.fillStyle=i<3?hex2rgba(ms[i],0.06):'rgba(20,25,45,0.3)';
+        ctx.fillRect(S.sx(15),iy,canvas.width-S.sx(30),itemH-S.s(4));
+        ctx.fillStyle=i<3?ms[i]:C.textDim;ctx.font='bold '+S.s(14)+'px Arial';ctx.textAlign='left';ctx.textBaseline='middle';
         var rank=i<3?['🥇','🥈','🥉'][i]:((i+1)+'.');
-        ctx.fillText(rank,S.sx(30),iy+itemH/2-S.s(2));
-        ctx.fillStyle=C.textMain;ctx.font=S.s(14)+'px Arial';
-        ctx.fillText('L'+(lb[i].level||'-')+' '+(lb[i].name||'我'),S.sx(70),iy+itemH/2-S.s(2));
+        ctx.fillText(rank,S.sx(25),iy+itemH/2-S.s(2));
+        ctx.fillStyle=C.textMain;ctx.font=S.s(13)+'px Arial';
+        ctx.fillText('L'+(lb[i].level||'-')+' '+(lb[i].name||'我'),S.sx(65),iy+itemH/2-S.s(2));
         ctx.fillStyle=C.neonGreen;ctx.textAlign='right';
-        ctx.fillText((lb[i].score||0)+'分',canvas.width-S.sx(30),iy+itemH/2-S.s(2));
+        ctx.fillText((lb[i].score||0)+'分',canvas.width-S.sx(25),iy+itemH/2-S.s(2));
       }
     }
-  } else {
-    // 世界排行
-    if(!gs.worldScores||!gs.worldScores.length) loadWorldScores();
+  }else{
+    if(!gs.worldScores||!gs.worldScores.length)loadWorldScores();
     if(gs.worldScores.length>0){
       var ms=[C.neonYellow,'#C0C0C0','#CD7F32'];
       for(var i=0;i<Math.min(gs.worldScores.length,10);i++){
         var iy=listY+i*itemH;
-        ctx.fillStyle=i<3?hex2rgba(ms[i],0.08):'rgba(30,35,60,0.3)';
-        ctx.fillRect(S.sx(20),iy,canvas.width-S.sx(40),itemH-S.s(4));
-        ctx.fillStyle=i<3?ms[i]:C.textDim;ctx.font='bold '+S.s(15)+'px Arial';ctx.textAlign='left';ctx.textBaseline='middle';
+        ctx.fillStyle=i<3?hex2rgba(ms[i],0.06):'rgba(20,25,45,0.3)';
+        ctx.fillRect(S.sx(15),iy,canvas.width-S.sx(30),itemH-S.s(4));
+        ctx.fillStyle=i<3?ms[i]:C.textDim;ctx.font='bold '+S.s(14)+'px Arial';ctx.textAlign='left';ctx.textBaseline='middle';
         var rank=i<3?['🥇','🥈','🥉'][i]:((i+1)+'.');
-        ctx.fillText(rank,S.sx(30),iy+itemH/2-S.s(2));
-        ctx.fillStyle=C.textMain;ctx.font=S.s(14)+'px Arial';
-        ctx.fillText(gs.worldScores[i].name||'???',S.sx(70),iy+itemH/2-S.s(2));
+        ctx.fillText(rank,S.sx(25),iy+itemH/2-S.s(2));
+        ctx.fillStyle=C.textMain;ctx.font=S.s(13)+'px Arial';
+        ctx.fillText(gs.worldScores[i].name||'???',S.sx(65),iy+itemH/2-S.s(2));
         ctx.fillStyle=C.neonGreen;ctx.textAlign='right';
-        ctx.fillText(gs.worldScores[i].score+'分',canvas.width-S.sx(30),iy+itemH/2-S.s(2));
+        ctx.fillText(gs.worldScores[i].score+'分',canvas.width-S.sx(25),iy+itemH/2-S.s(2));
       }
-    } else {
-      ctx.fillStyle=C.textDim;ctx.font=S.s(15)+'px Arial';ctx.textAlign='center';
-      ctx.fillText('暂无世界排行数据',canvas.width/2,listY+S.s(80));
     }
   }
 
-  // 返回
-  var bw=S.s(280),backY=canvas.height-S.sy(70);
-  drawBtn((canvas.width-bw)/2,backY,bw,S.s(50),'返回主菜单',C.neonRed);
-  regBtn((canvas.width-bw)/2,backY,bw,S.s(50),function(){gs.currentScene='menu';});
+  var bw=S.s(250),backY=canvas.height-S.sb-S.s(55);
+  drawNeonBtn((canvas.width-bw)/2,backY,bw,S.s(46),'返回主菜单',C.neonRed);
+  regBtn((canvas.width-bw)/2,backY,bw,S.s(46),function(){gs.currentScene='menu';});
 }
 
 // ===== 玩法说明 =====
 function renderHelp(){
-  ctx.fillStyle=C.bg;ctx.fillRect(0,0,canvas.width,canvas.height);drawStars();
-  ctx.save();ctx.shadowColor=C.neonPurple;ctx.shadowBlur=12;ctx.fillStyle=C.neonPurple;ctx.font='bold '+S.s(26)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('玩法说明',canvas.width/2,S.safY(40));ctx.restore();
+  ctx.fillStyle=C.bg;ctx.fillRect(0,0,canvas.width,canvas.height);
+  drawCachedStars();drawScanLine(0.02);drawNeonBorder();
 
-  var t=['▸ 点击方块 → 磁铁抓住它','▸ 左右滑动 → 甩动方块','▸ 再次点击 → 释放砸向建筑','▸ 砸中建筑 → 得分！','▸ 连续破坏 → 连击加分','▸ TNT方块 → 爆炸范围伤害','▸ 摧毁支撑 → 建筑倒塌','▸ 达到目标分数 → 过关'];
-  ctx.fillStyle=C.textMain;ctx.font=S.s(14)+'px Arial';ctx.textAlign='left';
-  for(var i=0;i<t.length;i++)ctx.fillText(t[i],S.sx(25),S.safY(80)+i*S.s(30));
+  ctx.fillStyle=C.neonPurple;ctx.font='bold '+S.s(24)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText('玩法说明',canvas.width/2,S.safY(35));
 
-  // 机制列表
-  var mcY=S.safY(80)+t.length*S.s(30)+S.s(10);
-  ctx.fillStyle=C.neonCyan;ctx.font='bold '+S.s(14)+'px Arial';ctx.textAlign='left';
+  var t=['▸ 点击方块 → 磁铁抓住','▸ 左右滑动 → 甩动蓄力','▸ 再次点击 → 释放砸建筑','▸ 砸中得分 → 连击加成！','▸ TNT方块 → 范围爆炸','▸ 摧毁支撑 → 建筑倒塌','▸ 达到目标 → 过关！','▸ 连续登录 → 每日奖励'];
+  ctx.fillStyle=C.textMain;ctx.font=S.s(13)+'px Arial';ctx.textAlign='left';
+  for(var i=0;i<t.length;i++)ctx.fillText(t[i],S.sx(25),S.safY(70)+i*S.s(26));
+
+  var mcY=S.safY(70)+t.length*S.s(26)+S.s(8);
+  ctx.fillStyle=C.neonCyan;ctx.font='bold '+S.s(13)+'px Arial';ctx.textAlign='left';
   ctx.fillText('【每10关解锁新玩法】',S.sx(25),mcY);
-  mcY+=S.s(24);
-
-  // 显示前10个机制
-  var showCount = Math.min(MECHANICS.length, 10);
+  mcY+=S.s(22);
+  var showCount=Math.min(MECHANICS.length,8);
   for(var mi=0;mi<showCount;mi++){
     var m=MECHANICS[mi];
-    ctx.fillStyle=m.color;ctx.font=S.s(12)+'px Arial';ctx.textAlign='left';
-    ctx.fillText('L'+m.level+': '+m.name+' - '+m.desc,S.sx(30),mcY+mi*S.s(20));
+    ctx.fillStyle=m.color;ctx.font=S.s(11)+'px Arial';ctx.textAlign='left';
+    ctx.fillText('L'+m.level+': '+m.name+' — '+m.desc,S.sx(30),mcY+mi*S.s(18));
   }
 
-  drawNPC(canvas.width-S.s(70),mcY+S.s(30),S.s(55));
-  var bw=S.s(280),backY=canvas.height-S.sy(70);
-  drawBtn((canvas.width-bw)/2,backY,bw,S.s(50),'返回主菜单',C.neonRed);
-  regBtn((canvas.width-bw)/2,backY,bw,S.s(50),function(){gs.currentScene='menu';});
+  drawNPC(canvas.width-S.s(60),mcY+S.s(20),S.s(50));
+
+  var bw=S.s(250),backY=canvas.height-S.sb-S.s(55);
+  drawNeonBtn((canvas.width-bw)/2,backY,bw,S.s(46),'返回主菜单',C.neonRed);
+  regBtn((canvas.width-bw)/2,backY,bw,S.s(46),function(){gs.currentScene='menu';});
 }
 
-// ===== 通用绘制 =====
-function drawBtn(x,y,w,h,t,c){ctx.save();ctx.fillStyle=hex2rgba(c,.08);rr(ctx,x,y,w,h,S.s(6));ctx.fill();ctx.shadowColor=c;ctx.shadowBlur=6;ctx.strokeStyle=hex2rgba(c,.6);ctx.lineWidth=S.s(1.5);rr(ctx,x,y,w,h,S.s(6));ctx.stroke();ctx.shadowBlur=0;ctx.fillStyle=c;ctx.font='bold '+S.s(17)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(t,x+w/2,y+h/2);ctx.restore();}
-function drawStars(){ctx.fillStyle='#fff';for(var i=0;i<50;i++){var x=(i*127+33)%canvas.width,y=(i*89+17)%canvas.height;ctx.globalAlpha=.3+Math.sin(frame*.02+i)*.2;ctx.fillRect(x,y,1,1);}ctx.globalAlpha=1;}
-
+// ===== NPC绘制 =====
 function drawNPC(x,y,sz){
   ctx.save();var cx=x+sz*.4,s=sz;
   ctx.fillStyle='#FF6B9D';ctx.beginPath();ctx.ellipse(cx,y+s*.22,s*.28,s*.28,0,0,Math.PI*2);ctx.fill();
@@ -1097,16 +1432,16 @@ function drawNPC(x,y,sz){
 }
 
 function drawBubble(x,y,mw,text){
-  if(!text)return;ctx.save();var fs=S.s(13);ctx.font=fs+'px Arial';
+  if(!text)return;ctx.save();var fs=S.s(12);ctx.font=fs+'px Arial';
   var lines=[],line='';
   for(var i=0;i<text.length;i++){var tl=line+text[i];if(ctx.measureText(tl).width>mw-S.s(20)){lines.push(line);line=text[i];}else line=tl;}
   if(line)lines.push(line);
-  var lh=fs+S.s(4),bh=lines.length*lh+S.s(16),bw=mw;
+  var lh=fs+S.s(4),bh=lines.length*lh+S.s(14),bw=mw;
   var a=Math.min(1,gs.npcTimer/30);
   ctx.fillStyle='rgba(20,15,50,'+(0.9*a)+')';rr(ctx,x,y,bw,bh,S.s(8));ctx.fill();
-  ctx.strokeStyle=hex2rgba(C.neonPurple,.6*a);ctx.lineWidth=S.s(1);rr(ctx,x,y,bw,bh,S.s(8));ctx.stroke();
+  ctx.strokeStyle=hex2rgba(C.neonPurple,.5*a);ctx.lineWidth=S.s(1);rr(ctx,x,y,bw,bh,S.s(8));ctx.stroke();
   ctx.fillStyle=hex2rgba(C.textMain,a);ctx.font=fs+'px Arial';ctx.textAlign='left';ctx.textBaseline='top';
-  for(var li=0;li<lines.length;li++)ctx.fillText(lines[li],x+S.s(10),y+S.s(8)+li*lh);
+  for(var li=0;li<lines.length;li++)ctx.fillText(lines[li],x+S.s(10),y+S.s(7)+li*lh);
   ctx.restore();
 }
 
