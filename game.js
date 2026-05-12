@@ -17,7 +17,7 @@ var BuildingGenerator = require('./js/BuildingGenerator');
 var AudioManager = require('./js/AudioManager').AudioManager;
 var SoundNames = require('./js/AudioManager').SoundNames;
 
-var VERSION = '3.0.3';
+var VERSION = '3.0.4';
 
 // ===== 配色（统一管理）=====
 var C = {
@@ -58,6 +58,7 @@ var gs = {
   lbTab: 'friend', friendScores: [], worldScores: [],
   // 动画状态
   scanY: 0, pulseTime: 0, menuAnim: 0, slowMo: 0, slowMoFactor: 1,
+  lbFriendLoaded: false,
   // 每日奖励
   dailyReward: false, loginStreak: 0, lastLoginDate: '',
   // 成就
@@ -380,20 +381,42 @@ function saveToCloud(lv, score) {
 }
 
 function loadFriendScores() {
+  gs.lbFriendLoaded = false;
+  // 通过开放数据域获取好友排行
   if (openDataContext) {
     try { openDataContext.postMessage({ action: 'getFriendRank' }); } catch(e) {}
   }
+  // 同时从本地历史记录读取（作为补充）
   try { var d=wx.getStorageSync('leaderboard'); if(d)gs.friendScores=JSON.parse(d); } catch(e) {}
+  gs.lbFriendLoaded = true;
 }
 
 function loadWorldScores() {
-  try { var d=wx.getStorageSync('worldLeaderboard'); if(d){gs.worldScores=JSON.parse(d);return;} } catch(e) {}
-  var names=['拆迁大王','破坏神','磁力大师','建筑克星','闪电手','拆迁新人','铁锤达人','爆破专家','拆迁队长','重力使者',
-             '连锁反应','甩飞高手','连击之王','精准打击','速通达人','磁铁之心','钢铁破坏','冰封拆迁','弹力天王','火焰终结'];
-  gs.worldScores=[];
-  for(var i=0;i<20;i++){gs.worldScores.push({name:names[i],score:Math.floor(10000-i*400+Math.random()*200),level:Math.min(1000,900-i*40)});}
-  gs.worldScores.sort(function(a,b){return b.score-a.score;});
-  try{wx.setStorageSync('worldLeaderboard',JSON.stringify(gs.worldScores));}catch(e){}
+  // 世界排行：使用微信云存储 wx.getCloudStorageSummary 不可用
+  // 改为只显示自己的历史最高分排行（真实数据）
+  gs.worldScores = [];
+  try {
+    var all = [];
+    // 从各关卡进度中提取分数
+    var keys = Object.keys(progress.levels);
+    for (var i = 0; i < keys.length; i++) {
+      var lv = keys[i];
+      var data = progress.levels[lv];
+      if (data && data.score > 0) {
+        all.push({ level: parseInt(lv), score: data.score, stars: data.stars || 0 });
+      }
+    }
+    all.sort(function(a, b) { return b.score - a.score; });
+    var uname = (gs.userInfo && gs.userInfo.nickName) || '我';
+    for (var j = 0; j < Math.min(all.length, 20); j++) {
+      gs.worldScores.push({
+        name: uname,
+        score: all[j].score,
+        level: all[j].level,
+        stars: all[j].stars
+      });
+    }
+  } catch(e) {}
 }
 
 // ===== NPC =====
@@ -557,7 +580,7 @@ function checkFlyingHits() {
           gs.flash=0.15;
 
           // 慢动作（高连击时触发）
-          if(gs.combo>=3) gs.slowMo=8;
+          if(gs.combo>=5) gs.slowMo=6;
 
           spawnDebris(cx,cy,t.color||C.neonOrange,8);
           spawnSparks(cx,cy,C.neonYellow,6);
@@ -566,14 +589,14 @@ function checkFlyingHits() {
           // 连击特效
           if(gs.combo>=3){
             addFloat(cx,cy-S.s(25),gs.combo+'x COMBO!',C.neonPurple);
-            gs.shake=Math.min(30,gs.combo*5);
+            gs.shake=Math.min(12,gs.combo*2);
           }
 
           audio.playSound(SoundNames.DESTROY);
           NPC.show(NPC.say(gs.combo>2?'combo':'hit'),60);
 
           if(t.explosive){
-            gs.shake=30;gs.flash=0.4;
+            gs.shake=12;gs.flash=0.3;
             spawnDebris(cx,cy,C.neonRed,12);spawnSparks(cx,cy,C.neonYellow,10);
             for(var k=0;k<buildings.length;k++){var bk=buildings[k];if(bk.isDestroyed||bk===t)continue;
               var dx2=(bk.x+bk.width/2)-cx,dy2=(bk.y+bk.height/2)-cy;
@@ -720,7 +743,8 @@ function loadLevel(lv){
 function clearTimer(){if(gameTimer){clearInterval(gameTimer);gameTimer=null;}}
 function startTimer(){clearTimer();gameTimer=setInterval(function(){
   if(!gs.gameActive||gs.gamePaused)return;gs.timeLeft--;
-  if(gs.timeLeft<=10&&gs.timeLeft>0){try{wx.vibrateShort();}catch(e){}audio.playSound(SoundNames.WARNING);if(gs.timeLeft<=5)NPC.show(NPC.say('lowtime'),60);}
+  // 仅最后3秒震动提醒（减少震动频率）
+  if(gs.timeLeft<=3&&gs.timeLeft>0){try{wx.vibrateShort({type:'light'});}catch(e){}audio.playSound(SoundNames.WARNING);if(gs.timeLeft<=3)NPC.show(NPC.say('lowtime'),60);}
   if(gs.timeLeft<=0){gs.timeLeft=0;endGame(false);}
 },1000);}
 
@@ -792,8 +816,10 @@ function render(){
 
 // ===== 科技感动画层 =====
 function drawScanLine(alpha) {
-  ctx.fillStyle = hex2rgba(C.neonCyan, alpha || 0.03);
-  ctx.fillRect(0, gs.scanY, canvas.width, 2);
+  // 极轻量扫描线，不干扰视觉
+  var a = alpha || 0.015;
+  ctx.fillStyle = hex2rgba(C.neonCyan, a);
+  ctx.fillRect(0, gs.scanY, canvas.width, 1);
 }
 
 function drawPulseRing(x, y, maxR, color, alpha) {
@@ -806,9 +832,12 @@ function drawPulseRing(x, y, maxR, color, alpha) {
 }
 
 function drawGridLines(alpha) {
-  ctx.strokeStyle = hex2rgba(C.neonCyan, alpha || 0.04);
+  // 网格线只在菜单页绘制，游戏中不画（节省性能）
+  if (gs.currentScene !== 'menu') return;
+  var a = alpha || 0.02;
+  ctx.strokeStyle = hex2rgba(C.neonCyan, a);
   ctx.lineWidth = S.s(0.5);
-  var spacing = S.s(40);
+  var spacing = S.s(50);
   for (var x = 0; x < canvas.width; x += spacing) {
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
   }
@@ -818,8 +847,10 @@ function drawGridLines(alpha) {
 }
 
 function drawNeonBorder() {
-  ctx.strokeStyle = hex2rgba(C.neonCyan, 0.15 + Math.sin(gs.pulseTime) * 0.05);
-  ctx.lineWidth = S.s(2);
+  // 边框只在菜单页绘制，游戏中不画
+  if (gs.currentScene !== 'menu') return;
+  ctx.strokeStyle = hex2rgba(C.neonCyan, 0.1 + Math.sin(gs.pulseTime) * 0.03);
+  ctx.lineWidth = S.s(1);
   ctx.strokeRect(S.s(2), S.st, canvas.width - S.s(4), canvas.height - S.st - S.s(2));
 }
 
@@ -938,9 +969,7 @@ function renderGame(){
   if(g){g.addColorStop(0,'#020510');g.addColorStop(.6,'#0a1035');g.addColorStop(1,'#0d1540');ctx.fillStyle=g;}else ctx.fillStyle=C.bg;
   ctx.fillRect(0,0,canvas.width,canvas.height);
 
-  // 轻量网格
-  drawGridLines(0.02);
-  drawScanLine(0.02);
+  // 游戏场景不画网格和扫描线，节省GPU
   drawCachedStars();
 
   // 地面
@@ -952,10 +981,8 @@ function renderGame(){
   drawCrane();
   drawParticles();drawFloats();
 
-  // 慢动作效果
-  if(gs.slowMo>0){
-    ctx.fillStyle='rgba(0,240,255,0.05)';ctx.fillRect(0,0,canvas.width,canvas.height);
-  }
+  // 慢动作效果 - 仅HUD提示，不全屏色块
+  // (不画全屏半透明层，避免视觉干扰)
 
   if(gs.flash>.01){ctx.fillStyle='rgba(255,255,255,'+gs.flash+')';ctx.fillRect(0,0,canvas.width,canvas.height);}
   drawHUD();
@@ -998,6 +1025,9 @@ function drawBuildings(){
     // 建筑整体背景暗色衬底
     ctx.fillStyle='rgba(10,20,50,0.3)';
     ctx.fillRect(g.minX-pad,g.minY-pad,g.maxX-g.minX+pad*2,g.maxY-g.minY+pad*2);
+    // 建筑标签
+    ctx.fillStyle=C.neonCyan;ctx.font=S.s(10)+'px Arial';ctx.textAlign='center';ctx.textBaseline='bottom';
+    ctx.fillText('▼ 建筑（可摧毁）',g.minX+(g.maxX-g.minX)/2,g.minY-pad-S.s(2));
   });
 
   // 画每个方块
@@ -1015,10 +1045,10 @@ function drawBuildings(){
     // 高光
     ctx.fillStyle='rgba(255,255,255,0.12)';ctx.fillRect(b.x+2,b.y+2,b.width-4,S.s(3));
 
-    // 类型标记
+    // 类型标记 - 建筑=材质名，TNT=特殊标记
     ctx.font='bold '+S.s(12)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillStyle='rgba(255,255,255,0.65)';
-    var label=b.type==='wood'?'木':b.type==='brick'?'砖':b.type==='steel'?'钢':b.type==='ice'?'冰':b.type==='rubber'?'胶':b.type==='tnt'?'TNT':'?';
+    var label=b.type==='wood'?'木':b.type==='brick'?'砖':b.type==='steel'?'钢':b.type==='ice'?'冰':b.type==='rubber'?'胶':b.type==='tnt'?'💣':'?';
     ctx.fillText(label,b.x+b.width/2,b.y+b.height/2);
 
     // 低血量发光
@@ -1062,6 +1092,10 @@ function drawCrane(){
   ctx.fillStyle='#2a3b5e';rr(ctx,cx-cw/2,cy,cw,ch,S.s(4));ctx.fill();
   ctx.strokeStyle=C.neonCyan;ctx.lineWidth=S.s(1.5);
   rr(ctx,cx-cw/2,cy,cw,ch,S.s(4));ctx.stroke();
+
+  // 工具标签
+  ctx.fillStyle=C.neonCyan;ctx.font=S.s(9)+'px Arial';ctx.textAlign='center';ctx.textBaseline='bottom';
+  ctx.fillText('🧲 拆迁工具',cx,cy-S.s(2));
 
   // 窗
   ctx.fillStyle=hex2rgba(C.neonCyan,.3);ctx.fillRect(cx-S.s(10),cy+S.s(10),S.s(20),S.s(14));
@@ -1166,7 +1200,7 @@ function drawHUD(){
 
   if(gs.gameActive&&!gs.gamePaused){
     var el=bg.getTimeLimit(gs.currentLevel)-gs.timeLeft;
-    if(el<4){ctx.fillStyle=hex2rgba(C.neonCyan,Math.max(0,1-el/4));ctx.font=S.s(13)+'px Arial';ctx.textAlign='center';ctx.fillText('点击抓取 → 滑动甩动 → 再点释放',canvas.width/2,canvas.height-S.s(18));}
+    if(el<4){ctx.fillStyle=hex2rgba(C.neonCyan,Math.max(0,1-el/4));ctx.font=S.s(13)+'px Arial';ctx.textAlign='center';ctx.fillText('点击建筑抓取 → 滑动甩动 → 释放砸向建筑',canvas.width/2,canvas.height-S.s(18));}
   }
 }
 
@@ -1348,12 +1382,12 @@ function renderLevelSel(){
 // ===== 排行榜 =====
 function renderLB(){
   ctx.fillStyle=C.bg;ctx.fillRect(0,0,canvas.width,canvas.height);
-  drawCachedStars();drawScanLine(0.02);drawNeonBorder();
+  drawCachedStars();drawNeonBorder();
 
   ctx.fillStyle=C.neonYellow;ctx.font='bold '+S.s(24)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
   ctx.fillText('排行榜',canvas.width/2,S.safY(35));
 
-  // Tab
+  // Tab: 好友排行 | 我的排行
   var tabW=S.s(120),tabH=S.s(36),tabY=S.safY(60),tabCx=canvas.width/2;
   // 好友
   ctx.fillStyle=gs.lbTab==='friend'?hex2rgba(C.neonCyan,0.15):'rgba(20,25,45,0.5)';
@@ -1366,7 +1400,7 @@ function renderLB(){
   ctx.fillText('好友排行',tabCx-tabW/2-S.s(3),tabY+tabH/2);
   regBtn(tabCx-tabW-S.s(3),tabY,tabW,tabH,function(){gs.lbTab='friend';loadFriendScores();});
 
-  // 世界
+  // 我的排行
   ctx.fillStyle=gs.lbTab==='world'?hex2rgba(C.neonYellow,0.15):'rgba(20,25,45,0.5)';
   rr(ctx,tabCx+S.s(3),tabY,tabW,tabH,S.s(6));ctx.fill();
   ctx.strokeStyle=gs.lbTab==='world'?C.neonYellow:'rgba(60,70,100,0.3)';
@@ -1374,50 +1408,77 @@ function renderLB(){
   rr(ctx,tabCx+S.s(3),tabY,tabW,tabH,S.s(6));ctx.stroke();
   ctx.fillStyle=gs.lbTab==='world'?C.neonYellow:C.textDim;
   ctx.font='bold '+S.s(14)+'px Arial';ctx.textAlign='center';
-  ctx.fillText('世界排行',tabCx+tabW/2+S.s(3),tabY+tabH/2);
+  ctx.fillText('我的排行',tabCx+tabW/2+S.s(3),tabY+tabH/2);
   regBtn(tabCx+S.s(3),tabY,tabW,tabH,function(){gs.lbTab='world';loadWorldScores();});
 
-  var listY=tabY+tabH+S.s(12),itemH=S.s(36);
+  var listY=tabY+tabH+S.s(12),itemH=S.s(40);
 
   if(gs.lbTab==='friend'){
+    // 好友排行 - 使用开放数据域
+    var hasFriendData = false;
+
+    // 优先尝试绘制开放数据域画布
     if(openDataContext){
-      try{var sharedCanvas=openDataContext.canvas;if(sharedCanvas)ctx.drawImage(sharedCanvas,0,listY,canvas.width,canvas.height-listY-S.s(80));}catch(e){}
+      try{
+        var sharedCanvas=openDataContext.canvas;
+        if(sharedCanvas){
+          ctx.drawImage(sharedCanvas,0,listY,canvas.width,canvas.height-listY-S.s(80));
+          hasFriendData = true;
+        }
+      }catch(e){}
     }
-    var lb=[];try{var d=wx.getStorageSync('leaderboard');if(d)lb=JSON.parse(d);}catch(e){}
-    if(!lb.length){
+
+    // 如果开放数据域没有数据，显示提示
+    if(!hasFriendData){
       ctx.fillStyle=C.textDim;ctx.font=S.s(14)+'px Arial';ctx.textAlign='center';
-      ctx.fillText('暂无好友记录',canvas.width/2,listY+S.s(60));
-    }else{
-      var ms=[C.neonYellow,'#C0C0C0','#CD7F32'];
-      for(var i=0;i<Math.min(lb.length,10);i++){
-        var iy=listY+i*itemH;
-        ctx.fillStyle=i<3?hex2rgba(ms[i],0.06):'rgba(20,25,45,0.3)';
-        ctx.fillRect(S.sx(15),iy,canvas.width-S.sx(30),itemH-S.s(4));
-        ctx.fillStyle=i<3?ms[i]:C.textDim;ctx.font='bold '+S.s(14)+'px Arial';ctx.textAlign='left';ctx.textBaseline='middle';
-        var rank=i<3?['🥇','🥈','🥉'][i]:((i+1)+'.');
-        ctx.fillText(rank,S.sx(25),iy+itemH/2-S.s(2));
-        ctx.fillStyle=C.textMain;ctx.font=S.s(13)+'px Arial';
-        ctx.fillText('L'+(lb[i].level||'-')+' '+(lb[i].name||'我'),S.sx(65),iy+itemH/2-S.s(2));
-        ctx.fillStyle=C.neonGreen;ctx.textAlign='right';
-        ctx.fillText((lb[i].score||0)+'分',canvas.width-S.sx(25),iy+itemH/2-S.s(2));
-      }
+      ctx.fillText('需要微信好友也在玩此游戏',canvas.width/2,listY+S.s(40));
+      ctx.fillText('好友数据才会显示在排行榜中',canvas.width/2,listY+S.s(65));
+      ctx.fillStyle=hex2rgba(C.neonCyan,0.3);ctx.font=S.s(12)+'px Arial';
+      ctx.fillText('分享给好友一起玩吧！',canvas.width/2,listY+S.s(95));
     }
   }else{
+    // 我的排行 - 显示真实历史数据
     if(!gs.worldScores||!gs.worldScores.length)loadWorldScores();
     if(gs.worldScores.length>0){
-      var ms=[C.neonYellow,'#C0C0C0','#CD7F32'];
-      for(var i=0;i<Math.min(gs.worldScores.length,10);i++){
-        var iy=listY+i*itemH;
-        ctx.fillStyle=i<3?hex2rgba(ms[i],0.06):'rgba(20,25,45,0.3)';
+      // 表头
+      ctx.fillStyle=C.textDim;ctx.font='bold '+S.s(11)+'px Arial';ctx.textAlign='left';
+      ctx.fillText('关卡',S.sx(25),listY);
+      ctx.textAlign='center';
+      ctx.fillText('星级',canvas.width/2,listY);
+      ctx.textAlign='right';
+      ctx.fillText('得分',canvas.width-S.sx(25),listY);
+
+      for(var i=0;i<Math.min(gs.worldScores.length,15);i++){
+        var iy=listY+S.s(16)+i*itemH;
+        var d=gs.worldScores[i];
+        // 行背景
+        ctx.fillStyle=i%2===0?'rgba(20,25,45,0.3)':'rgba(10,15,35,0.2)';
         ctx.fillRect(S.sx(15),iy,canvas.width-S.sx(30),itemH-S.s(4));
-        ctx.fillStyle=i<3?ms[i]:C.textDim;ctx.font='bold '+S.s(14)+'px Arial';ctx.textAlign='left';ctx.textBaseline='middle';
-        var rank=i<3?['🥇','🥈','🥉'][i]:((i+1)+'.');
-        ctx.fillText(rank,S.sx(25),iy+itemH/2-S.s(2));
-        ctx.fillStyle=C.textMain;ctx.font=S.s(13)+'px Arial';
-        ctx.fillText(gs.worldScores[i].name||'???',S.sx(65),iy+itemH/2-S.s(2));
-        ctx.fillStyle=C.neonGreen;ctx.textAlign='right';
-        ctx.fillText(gs.worldScores[i].score+'分',canvas.width-S.sx(25),iy+itemH/2-S.s(2));
+
+        // 排名
+        ctx.fillStyle=C.textDim;ctx.font='bold '+S.s(13)+'px Arial';ctx.textAlign='left';ctx.textBaseline='middle';
+        ctx.fillText((i+1)+'.',S.sx(22),iy+itemH/2-S.s(2));
+
+        // 关卡
+        ctx.fillStyle=C.textMain;ctx.font=S.s(14)+'px Arial';ctx.textAlign='left';
+        ctx.fillText('L'+(d.level||'?'),S.sx(55),iy+itemH/2-S.s(2));
+
+        // 星级
+        ctx.textAlign='center';
+        var starStr='';
+        for(var si=0;si<(d.stars||0);si++)starStr+='★';
+        ctx.fillStyle=C.neonYellow;ctx.font=S.s(12)+'px Arial';
+        ctx.fillText(starStr||'—',canvas.width/2,iy+itemH/2-S.s(2));
+
+        // 分数
+        ctx.fillStyle=C.neonGreen;ctx.textAlign='right';ctx.font='bold '+S.s(14)+'px Arial';
+        ctx.fillText((d.score||0)+'分',canvas.width-S.sx(22),iy+itemH/2-S.s(2));
       }
+    }else{
+      ctx.fillStyle=C.textDim;ctx.font=S.s(14)+'px Arial';ctx.textAlign='center';
+      ctx.fillText('还没有通关记录',canvas.width/2,listY+S.s(60));
+      ctx.fillStyle=hex2rgba(C.neonGreen,0.3);ctx.font=S.s(12)+'px Arial';
+      ctx.fillText('去打几关再来查看吧！',canvas.width/2,listY+S.s(85));
     }
   }
 
