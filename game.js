@@ -17,7 +17,7 @@ var BuildingGenerator = require('./js/BuildingGenerator');
 var AudioManager = require('./js/AudioManager').AudioManager;
 var SoundNames = require('./js/AudioManager').SoundNames;
 
-var VERSION = '3.0.5';
+var VERSION = '3.0.6';
 
 // ===== 配色（统一管理）=====
 var C = {
@@ -541,25 +541,36 @@ function gameLoop() {
 // ===== 每帧更新 =====
 function update() {
   crane.update();
+  var gy=canvas.height-S.s(50);
   // 工具物理更新
   for(var i=0;i<tools.length;i++){
     var t=tools[i];
     if(t.isGrabbed||!t.isActive) continue;
-    t.velocityY += 0.5; // 重力
+    // 限速防止穿透
+    if(t.velocityY>8) t.velocityY=8;
+    if(t.velocityY<-8) t.velocityY=-8;
+    if(t.velocityX>10) t.velocityX=10;
+    if(t.velocityX<-10) t.velocityX=-10;
+    t.velocityY += 0.4; // 重力
     t.x += t.velocityX;
     t.y += t.velocityY;
-    // 地面碰撞
-    var gy=canvas.height-S.s(50);
-    if(t.y+t.height>gy){t.y=gy-t.height;t.velocityY*=-0.3;t.velocityX*=0.8;if(Math.abs(t.velocityY)<0.5)t.velocityY=0;}
+    // 地面碰撞 - 强制clamp
+    if(t.y+t.height>gy){
+      t.y=gy-t.height;
+      t.velocityY=Math.abs(t.velocityY)>1 ? t.velocityY*-0.3 : 0;
+      t.velocityX*=0.85;
+    }
     // 左右墙
     if(t.x<0){t.x=0;t.velocityX*=-0.5;}
     if(t.x+t.width>canvas.width){t.x=canvas.width-t.width;t.velocityX*=-0.5;}
-    // 速度衰减
-    t.velocityX*=0.995;
+    // 顶部
+    if(t.y<0){t.y=0;t.velocityY=Math.abs(t.velocityY)*0.3;}
+    // 摩擦
+    if(Math.abs(t.velocityX)<0.1) t.velocityX=0;
   }
-  // 建筑悬空检测（不自动破坏）
+  // 建筑悬空检测
   checkFloatingBlocks();
-  // 核心：工具撞击建筑检测
+  // 工具撞击建筑
   checkToolHits();
   checkGameEnd();
 }
@@ -584,26 +595,28 @@ function checkToolHits() {
         var dist=Math.sqrt(dx*dx+dy*dy);
         var angleFactor = dist>0 ? Math.max(0.4, Math.abs(dy)/(dist+1)) : 1; // 垂直打击更有效
 
-        // 伤害 = 工具硬度 × 碰撞力度 × 角度系数
+        // 伤害 = 工具硬度 × 碰撞力度 × 角度系数 / 建筑防御
         var impactForce = spd * tool.hardness;
-        var dmg = impactForce * angleFactor / (bld.mass || 1);
-        bld.health -= dmg;
+        var dmg = Math.max(1, impactForce * angleFactor / (bld.mass || 1));
+        // 伤害不超过当前血量（避免负分）
+        var actualDmg = Math.min(dmg, bld.health);
+        bld.health -= actualDmg;
 
         var cx=bld.x+bld.width/2, cy=bld.y+bld.height/2;
-        gs.shake=Math.min(8,impactForce*0.08);
+        gs.shake=Math.min(8,impactForce*0.06);
         audio.playSound(SoundNames.CRASH);
         spawnSparks(cx,cy,bld.color||C.neonOrange,4);
 
-        // 显示伤害数值
-        var dmgShow=Math.floor(dmg);
-        addFloat(cx,cy-S.s(10),'-'+dmgShow,C.neonOrange);
+        // 伤害飘字
+        addFloat(cx,cy-S.s(10),Math.floor(actualDmg)+'伤害',C.neonOrange);
 
         if(bld.health<=0){
           bld.health=0; bld.isDestroyed=true;
-          // 得分 = 基础分 × 硬度系数 × 角度系数
-          var pts=Math.floor((bld.score||10) * tool.hardness * angleFactor);
+          // 得分 = 基础分 × 硬度系数 × 角度系数（保底>=1）
+          var pts=Math.max(1, Math.floor((bld.score||10) * tool.hardness * angleFactor));
           gs.combo++; gs.comboTimer=90;
           if(gs.combo>1) pts=Math.floor(pts*(1+gs.combo*0.15));
+          pts=Math.max(1, pts); // 绝不出现0或负分
           gs.score+=pts;
           gs.totalDestroys++;
           if(gs.combo>gs.maxCombo) gs.maxCombo=gs.combo;
@@ -627,10 +640,12 @@ function checkToolHits() {
           if(bld.explosive){
             gs.shake=12;gs.flash=0.2;
             spawnDebris(cx,cy,C.neonRed,8);spawnSparks(cx,cy,C.neonYellow,6);
+            var bonusPts=0;
             for(var k=0;k<buildings.length;k++){var bk=buildings[k];if(bk.isDestroyed||bk===bld)continue;
               var dx2=(bk.x+bk.width/2)-cx,dy2=(bk.y+bk.height/2)-cy;
-              if(Math.sqrt(dx2*dx2+dy2*dy2)<120){bk.health-=40;if(bk.health<=0){bk.health=0;bk.isDestroyed=true;gs.score+=bk.score||10;spawnDebris(bk.x+bk.width/2,bk.y+bk.height/2,bk.color||C.neonRed,3);}}
+              if(Math.sqrt(dx2*dx2+dy2*dy2)<120){bk.health-=40;if(bk.health<=0){bk.health=0;bk.isDestroyed=true;bonusPts+=Math.max(1,bk.score||10);spawnDebris(bk.x+bk.width/2,bk.y+bk.height/2,bk.color||C.neonRed,3);}}
             }
+            if(bonusPts>0){gs.score+=bonusPts;addFloat(cx,cy-S.s(35),'爆炸+'+bonusPts,C.neonRed);}
           }
           addCollapse(bld);
         }
