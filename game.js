@@ -17,7 +17,7 @@ var BuildingGenerator = require('./js/BuildingGenerator');
 var AudioManager = require('./js/AudioManager').AudioManager;
 var SoundNames = require('./js/AudioManager').SoundNames;
 
-var VERSION = '3.0.6';
+var VERSION = '3.0.7';
 
 // ===== 配色（统一管理）=====
 var C = {
@@ -546,15 +546,51 @@ function update() {
   for(var i=0;i<tools.length;i++){
     var t=tools[i];
     if(t.isGrabbed||!t.isActive) continue;
-    // 限速防止穿透
-    if(t.velocityY>8) t.velocityY=8;
-    if(t.velocityY<-8) t.velocityY=-8;
-    if(t.velocityX>10) t.velocityX=10;
-    if(t.velocityX<-10) t.velocityX=-10;
-    t.velocityY += 0.4; // 重力
+    // 限速
+    t.velocityY = Math.max(-8, Math.min(8, t.velocityY + 0.4));
+    t.velocityX = Math.max(-10, Math.min(10, t.velocityX));
     t.x += t.velocityX;
     t.y += t.velocityY;
-    // 地面碰撞 - 强制clamp
+
+    // 与建筑物理碰撞（工具不能穿过未摧毁的建筑）
+    for(var bi=0;bi<buildings.length;bi++){
+      var bld=buildings[bi];
+      if(bld.isDestroyed) continue;
+      // AABB检测
+      if(t.x<bld.x+bld.width && t.x+t.width>bld.x && t.y<bld.y+bld.height && t.y+t.height>bld.y){
+        // 计算重叠量，把工具推出建筑
+        var overlapLeft = (t.x+t.width) - bld.x;
+        var overlapRight = (bld.x+bld.width) - t.x;
+        var overlapTop = (t.y+t.height) - bld.y;
+        var overlapBottom = (bld.y+bld.height) - t.y;
+        var minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
+
+        if(minOverlap === overlapTop && t.velocityY > 0){
+          // 工具从上方撞入 → 落在建筑顶上
+          t.y = bld.y - t.height;
+          t.velocityY = Math.abs(t.velocityY) > 1.5 ? t.velocityY * -0.3 : 0;
+          t.velocityX *= 0.7;
+        } else if(minOverlap === overlapBottom && t.velocityY < 0){
+          // 工具从下方撞入
+          t.y = bld.y + bld.height;
+          t.velocityY = Math.abs(t.velocityY) * 0.3;
+        } else if(minOverlap === overlapLeft && t.velocityX > 0){
+          // 工具从左方撞入
+          t.x = bld.x - t.width;
+          t.velocityX = Math.abs(t.velocityX) > 1 ? t.velocityX * -0.4 : 0;
+        } else if(minOverlap === overlapRight && t.velocityX < 0){
+          // 工具从右方撞入
+          t.x = bld.x + bld.width;
+          t.velocityX = Math.abs(t.velocityX) > 1 ? t.velocityX * -0.4 : 0;
+        } else {
+          // 默认推出到最近边
+          if(overlapTop < overlapBottom){ t.y = bld.y - t.height; t.velocityY = 0; }
+          else { t.y = bld.y + bld.height; t.velocityY = Math.abs(t.velocityY)*0.3; }
+        }
+      }
+    }
+
+    // 地面碰撞
     if(t.y+t.height>gy){
       t.y=gy-t.height;
       t.velocityY=Math.abs(t.velocityY)>1 ? t.velocityY*-0.3 : 0;
@@ -570,7 +606,7 @@ function update() {
   }
   // 建筑悬空检测
   checkFloatingBlocks();
-  // 工具撞击建筑
+  // 工具撞击建筑（得分逻辑）
   checkToolHits();
   checkGameEnd();
 }
@@ -581,7 +617,7 @@ function checkToolHits() {
     var tool=tools[ti];
     if(!tool.isActive||tool.isGrabbed) continue;
     var spd=Math.sqrt(tool.velocityX*tool.velocityX+tool.velocityY*tool.velocityY);
-    if(spd<3) continue; // 速度不够不算撞击
+    if(spd<2.5) continue; // 速度不够不算撞击
 
     for(var bi=0;bi<buildings.length;bi++){
       var bld=buildings[bi];
@@ -589,34 +625,31 @@ function checkToolHits() {
 
       // AABB碰撞
       if(tool.x<bld.x+bld.width && tool.x+tool.width>bld.x && tool.y<bld.y+bld.height && tool.y+tool.height>bld.y){
-        // 计算碰撞角度系数 (正面撞击=1, 侧面撞击=0.5~0.8)
+        // 碰撞方向
         var dx=(bld.x+bld.width/2)-(tool.x+tool.width/2);
         var dy=(bld.y+bld.height/2)-(tool.y+tool.height/2);
         var dist=Math.sqrt(dx*dx+dy*dy);
-        var angleFactor = dist>0 ? Math.max(0.4, Math.abs(dy)/(dist+1)) : 1; // 垂直打击更有效
+        // 角度系数: 从上方砸下(dy<0)最有效=1.0, 侧面=0.4~0.8
+        var angleFactor = dist>0 ? Math.max(0.4, Math.abs(-dy)/(dist+1)) : 1;
 
         // 伤害 = 工具硬度 × 碰撞力度 × 角度系数 / 建筑防御
         var impactForce = spd * tool.hardness;
         var dmg = Math.max(1, impactForce * angleFactor / (bld.mass || 1));
-        // 伤害不超过当前血量（避免负分）
         var actualDmg = Math.min(dmg, bld.health);
         bld.health -= actualDmg;
 
         var cx=bld.x+bld.width/2, cy=bld.y+bld.height/2;
-        gs.shake=Math.min(8,impactForce*0.06);
+        gs.shake=Math.min(6,impactForce*0.04);
         audio.playSound(SoundNames.CRASH);
         spawnSparks(cx,cy,bld.color||C.neonOrange,4);
-
-        // 伤害飘字
         addFloat(cx,cy-S.s(10),Math.floor(actualDmg)+'伤害',C.neonOrange);
 
         if(bld.health<=0){
           bld.health=0; bld.isDestroyed=true;
-          // 得分 = 基础分 × 硬度系数 × 角度系数（保底>=1）
           var pts=Math.max(1, Math.floor((bld.score||10) * tool.hardness * angleFactor));
           gs.combo++; gs.comboTimer=90;
           if(gs.combo>1) pts=Math.floor(pts*(1+gs.combo*0.15));
-          pts=Math.max(1, pts); // 绝不出现0或负分
+          pts=Math.max(1, pts);
           gs.score+=pts;
           gs.totalDestroys++;
           if(gs.combo>gs.maxCombo) gs.maxCombo=gs.combo;
@@ -650,9 +683,15 @@ function checkToolHits() {
           addCollapse(bld);
         }
 
-        // 工具反弹
-        tool.velocityX *= -0.4;
-        tool.velocityY *= -0.4;
+        // 工具反弹（已由update中的物理碰撞推出，这里只做速度反弹）
+        if(!bld.isDestroyed){
+          // 建筑没被摧毁，工具反弹力更大
+          tool.velocityX *= -0.5;
+          tool.velocityY = -Math.abs(tool.velocityY) * 0.4 - 2; // 弹起来一点
+        } else {
+          // 建筑被摧毁，工具继续运动但减速
+          tool.velocityY *= 0.6;
+        }
         break;
       }
     }
