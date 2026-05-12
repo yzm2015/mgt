@@ -17,7 +17,7 @@ var BuildingGenerator = require('./js/BuildingGenerator');
 var AudioManager = require('./js/AudioManager').AudioManager;
 var SoundNames = require('./js/AudioManager').SoundNames;
 
-var VERSION = '3.0.7';
+var VERSION = '3.0.8';
 
 // ===== 配色（统一管理）=====
 var C = {
@@ -552,40 +552,76 @@ function update() {
     t.x += t.velocityX;
     t.y += t.velocityY;
 
-    // 与建筑物理碰撞（工具不能穿过未摧毁的建筑）
+    // 与建筑碰撞（得分+物理推出 合一，修复V3.0.7计分失效Bug）
     for(var bi=0;bi<buildings.length;bi++){
       var bld=buildings[bi];
       if(bld.isDestroyed) continue;
-      // AABB检测
       if(t.x<bld.x+bld.width && t.x+t.width>bld.x && t.y<bld.y+bld.height && t.y+t.height>bld.y){
-        // 计算重叠量，把工具推出建筑
-        var overlapLeft = (t.x+t.width) - bld.x;
-        var overlapRight = (bld.x+bld.width) - t.x;
-        var overlapTop = (t.y+t.height) - bld.y;
-        var overlapBottom = (bld.y+bld.height) - t.y;
-        var minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
-
-        if(minOverlap === overlapTop && t.velocityY > 0){
-          // 工具从上方撞入 → 落在建筑顶上
-          t.y = bld.y - t.height;
-          t.velocityY = Math.abs(t.velocityY) > 1.5 ? t.velocityY * -0.3 : 0;
-          t.velocityX *= 0.7;
-        } else if(minOverlap === overlapBottom && t.velocityY < 0){
-          // 工具从下方撞入
-          t.y = bld.y + bld.height;
-          t.velocityY = Math.abs(t.velocityY) * 0.3;
-        } else if(minOverlap === overlapLeft && t.velocityX > 0){
-          // 工具从左方撞入
-          t.x = bld.x - t.width;
-          t.velocityX = Math.abs(t.velocityX) > 1 ? t.velocityX * -0.4 : 0;
-        } else if(minOverlap === overlapRight && t.velocityX < 0){
-          // 工具从右方撞入
-          t.x = bld.x + bld.width;
-          t.velocityX = Math.abs(t.velocityX) > 1 ? t.velocityX * -0.4 : 0;
-        } else {
-          // 默认推出到最近边
-          if(overlapTop < overlapBottom){ t.y = bld.y - t.height; t.velocityY = 0; }
-          else { t.y = bld.y + bld.height; t.velocityY = Math.abs(t.velocityY)*0.3; }
+        // === 得分判定（工具在建筑内时先算伤害，再推出）===
+        var spd=Math.sqrt(t.velocityX*t.velocityX+t.velocityY*t.velocityY);
+        if(spd>1.0&&(!t._hitCD||!t._hitCD[bi]||frame-t._hitCD[bi]>8)){
+          if(!t._hitCD)t._hitCD={};
+          t._hitCD[bi]=frame;
+          var dx=(bld.x+bld.width/2)-(t.x+t.width/2);
+          var dy=(bld.y+bld.height/2)-(t.y+t.height/2);
+          var dist=Math.sqrt(dx*dx+dy*dy);
+          var angleFactor=dist>0?Math.max(0.4,Math.abs(-dy)/(dist+1)):1;
+          var impactForce=spd*t.hardness;
+          var dmg=Math.max(1,impactForce*angleFactor/(bld.mass||1));
+          var actualDmg=Math.min(dmg,bld.health);
+          bld.health-=actualDmg;
+          var cx=bld.x+bld.width/2,cy=bld.y+bld.height/2;
+          gs.shake=Math.min(8,impactForce*0.05);
+          try{audio.playSound(SoundNames.CRASH);}catch(e){}
+          spawnSparks(cx,cy,bld.color||C.neonOrange,4);
+          addFloat(cx,cy-S.s(10),Math.floor(actualDmg)+'伤害',C.neonOrange);
+          if(bld.health<=0){
+            bld.health=0;bld.isDestroyed=true;
+            var pts=Math.max(1,Math.floor((bld.score||10)*t.hardness*angleFactor));
+            gs.combo++;gs.comboTimer=90;
+            if(gs.combo>1)pts=Math.floor(pts*(1+gs.combo*0.15));
+            pts=Math.max(1,pts);gs.score+=pts;gs.totalDestroys++;
+            if(gs.combo>gs.maxCombo)gs.maxCombo=gs.combo;
+            gs.totalScore+=pts;gs.flash=0.1;
+            if(gs.combo>=5)gs.slowMo=6;
+            spawnDebris(cx,cy,bld.color||C.neonOrange,6);
+            spawnSparks(cx,cy,C.neonYellow,4);
+            addFloat(cx,cy,'+'+pts,gs.combo>1?C.neonYellow:C.neonGreen);
+            if(gs.combo>=3){addFloat(cx,cy-S.s(25),gs.combo+'x COMBO!',C.neonPurple);gs.shake=Math.min(12,gs.combo*2);}
+            try{audio.playSound(SoundNames.DESTROY);}catch(e){}
+            NPC.show(NPC.say(gs.combo>2?'combo':'hit'),60);
+            if(bld.explosive){
+              gs.shake=12;gs.flash=0.2;
+              spawnDebris(cx,cy,C.neonRed,8);spawnSparks(cx,cy,C.neonYellow,6);
+              var bonusPts=0;
+              for(var k=0;k<buildings.length;k++){var bk=buildings[k];if(bk.isDestroyed||bk===bld)continue;
+                var dx2=(bk.x+bk.width/2)-cx,dy2=(bk.y+bk.height/2)-cy;
+                if(Math.sqrt(dx2*dx2+dy2*dy2)<120){bk.health-=40;if(bk.health<=0){bk.health=0;bk.isDestroyed=true;bonusPts+=Math.max(1,bk.score||10);spawnDebris(bk.x+bk.width/2,bk.y+bk.height/2,bk.color||C.neonRed,3);}}
+              }
+              if(bonusPts>0){gs.score+=bonusPts;addFloat(cx,cy-S.s(35),'爆炸+'+bonusPts,C.neonRed);}
+            }
+            addCollapse(bld);
+          }
+        }
+        // === 物理推出 ===
+        if(!bld.isDestroyed){
+          var overlapLeft=(t.x+t.width)-bld.x;
+          var overlapRight=(bld.x+bld.width)-t.x;
+          var overlapTop=(t.y+t.height)-bld.y;
+          var overlapBottom=(bld.y+bld.height)-t.y;
+          var minOverlap=Math.min(overlapLeft,overlapRight,overlapTop,overlapBottom);
+          if(minOverlap===overlapTop){
+            t.y=bld.y-t.height;t.velocityY=Math.abs(t.velocityY)>1.5?t.velocityY*-0.3:0;t.velocityX*=0.7;
+          }else if(minOverlap===overlapBottom){
+            t.y=bld.y+bld.height;t.velocityY=Math.abs(t.velocityY)*0.3;
+          }else if(minOverlap===overlapLeft){
+            t.x=bld.x-t.width;t.velocityX=Math.abs(t.velocityX)>1?t.velocityX*-0.4:0;
+          }else{
+            t.x=bld.x+bld.width;t.velocityX=Math.abs(t.velocityX)>1?t.velocityX*-0.4:0;
+          }
+        }else{
+          // 建筑已摧毁：工具减速穿过
+          t.velocityX*=0.8;t.velocityY*=0.8;
         }
       }
     }
@@ -606,8 +642,7 @@ function update() {
   }
   // 建筑悬空检测
   checkFloatingBlocks();
-  // 工具撞击建筑（得分逻辑）
-  checkToolHits();
+  // （得分已合并到上面碰撞处理中，不再单独调用checkToolHits）
   checkGameEnd();
 }
 
@@ -768,12 +803,14 @@ function handleGame(x,y,isTap){
   if(isTap){
     if(crane.isGrabbing()){
       // === 释放工具 ===
+      // 保存摆动状态（releaseMagnet会重置angularVelocity=0，V3.0.8修复）
+      var savedAV=crane.pendulum.angularVelocity;
+      var swingDir=savedAV>0.01?1:(savedAV<-0.01?-1:1); // 默认向右抛
+      var swingPower=Math.max(8,5+Math.abs(savedAV)*80);
       var block=crane.releaseMagnet();
       if(block){
-        var throwX=crane.pendulum.angularVelocity*100;
-        var throwY=-10;
-        block.velocityX=throwX/block.mass;
-        block.velocityY=throwY/block.mass;
+        block.velocityX=swingDir*swingPower; // 不再除以mass，保证足够投掷力
+        block.velocityY=-8; // 统一向上抛
         block.isGrabbed=false;
         audio.playSound(SoundNames.RELEASE);
         spawnSparks(block.x+block.width/2,block.y,C.neonCyan,4);
@@ -1238,6 +1275,12 @@ function drawTools(){
     if(!t.isActive) return;
     // 工具背景（明亮突出）
     ctx.save();
+    // 可抓取脉冲高亮（V3.0.8新增）
+    if(!t.isGrabbed&&!crane.isGrabbing()){
+      var pa=0.25+Math.sin(gs.pulseTime*3)*0.2;
+      ctx.strokeStyle=hex2rgba(C.neonGreen,pa);ctx.lineWidth=S.s(3);
+      rr(ctx,t.x-S.s(3),t.y-S.s(3),t.width+S.s(6),t.height+S.s(6),S.s(9));ctx.stroke();
+    }
     // 工具底色 - 用比建筑更亮的颜色
     ctx.fillStyle=hex2rgba(t.fill,0.9);
     rr(ctx,t.x,t.y,t.width,t.height,S.s(6));ctx.fill();
@@ -1269,7 +1312,7 @@ function drawTools(){
       if(spd < 0.5 && t.y + t.height >= groundY - 3){
         if(!t._stillTimer) t._stillTimer = 0;
         t._stillTimer++;
-        if(t._stillTimer > 120){ // 2秒后重生
+        if(t._stillTimer > 60){ // 1秒后重生（V3.0.8加快节奏）
           t.x = t.respawnX;
           t.y = t.respawnY;
           t.velocityX = 0;
@@ -1346,6 +1389,21 @@ function drawMag(mx,my){
     ctx.quadraticCurveTo(mx+(Math.random()-.5)*S.s(10),(my+blk.y)/2,blk.x+blk.width/2,blk.y);
     ctx.stroke();
   }
+  // 抛掷轨迹预览（V3.0.8新增）
+  if(grabbing){
+    var av=crane.pendulum.angularVelocity;
+    var tdir=av>0.01?1:(av<-0.01?-1:1);
+    var tpower=Math.max(8,5+Math.abs(av)*80);
+    var tvx=tdir*tpower,tvy=-8;
+    var tpx=mx,tpy=my+r+S.s(4);
+    ctx.fillStyle=hex2rgba(C.neonGreen,0.3);
+    for(var ti=1;ti<=7;ti++){
+      var dt2=ti*3;
+      var px2=tpx+tvx*dt2;
+      var py2=tpy+tvy*dt2+0.5*0.4*dt2*dt2;
+      ctx.beginPath();ctx.arc(px2,py2,S.s(2),0,Math.PI*2);ctx.fill();
+    }
+  }
 }
 
 function drawParticles(){
@@ -1409,6 +1467,14 @@ function drawHUD(){
     ctx.fillStyle=C.neonPurple;ctx.font='bold '+S.s(16)+'px Arial';ctx.textAlign='center';
     ctx.fillText(gs.combo+'x COMBO',canvas.width/2,ty+th+S.s(28));
   }
+
+  // 得分进度条（V3.0.8新增）
+  var pbW=canvas.width-S.sx(20),pbH=S.s(4),pbX=S.sx(10),pbY=ty+th+S.s(34);
+  var pct=gs.targetScore>0?Math.min(1,gs.score/gs.targetScore):0;
+  ctx.fillStyle='rgba(0,0,0,0.3)';ctx.fillRect(pbX,pbY,pbW,pbH);
+  ctx.fillStyle=pct>=1?C.neonGreen:pct>=0.5?C.neonCyan:C.neonRed;
+  ctx.fillRect(pbX,pbY,pbW*pct,pbH);
+  if(pct<1){ctx.fillStyle=C.textDim;ctx.font=S.s(8)+'px Arial';ctx.textAlign='right';ctx.fillText(Math.floor(pct*100)+'%',pbX+pbW-S.s(3),pbY+pbH-S.s(0.5));}
 
   if(gs.gameActive&&!gs.gamePaused){
     var el=bg.getTimeLimit(gs.currentLevel)-gs.timeLeft;
@@ -1579,7 +1645,7 @@ function renderLevelSel(){
   }
 
   // 快捷跳转
-  var jumpY=navY+navBtnH+S.s(10);
+  var jumpY=navY+S.s(36)+S.s(10);
   var jumpW=S.s(180),jumpH=S.s(34);
   drawNeonBtn((canvas.width-jumpW)/2,jumpY,jumpW,jumpH,'跳到最新 L'+progress.highestLevel,C.neonGreen);
   regBtn((canvas.width-jumpW)/2,jumpY,jumpW,jumpH,function(){gs.levelPage=Math.floor((progress.highestLevel-1)/perPage);});
