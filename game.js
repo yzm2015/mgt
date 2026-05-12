@@ -17,7 +17,7 @@ var BuildingGenerator = require('./js/BuildingGenerator');
 var AudioManager = require('./js/AudioManager').AudioManager;
 var SoundNames = require('./js/AudioManager').SoundNames;
 
-var VERSION = '3.0.2';
+var VERSION = '3.0.3';
 
 // ===== 配色（统一管理）=====
 var C = {
@@ -698,7 +698,12 @@ function loadLevel(lv){
   if(!progress.isUnlocked(lv)){NPC.show('关卡未解锁！',90);return;}
   clearTimer();
   buildings=bg.generateLevel(lv);
-  buildings.forEach(function(b){b.width=Math.max(b.width,S.s(50));b.height=Math.max(b.height,S.s(50));});
+  // 方块尺寸由BuildingGenerator控制，不再强制放大
+  // 确保方块有合理的最小尺寸
+  buildings.forEach(function(b){
+    if(b.width<20)b.width=20;
+    if(b.height<20)b.height=20;
+  });
   gs.currentLevel=lv;
   gs.targetScore=bg.getTargetScore(lv);gs.timeLeft=bg.getTimeLimit(lv);
   gs.score=0;gs.gameActive=true;gs.gamePaused=false;gs.currentScene='game';
@@ -960,32 +965,68 @@ function renderGame(){
 
 // ===== 建筑（优化：减少shadowBlur使用）=====
 function drawBuildings(){
+  // 先画建筑群整体阴影/地基，让建筑更醒目
+  var groundY = canvas.height - S.s(50);
+  
+  // 计算每栋建筑的范围
+  var buildingGroups = [];
+  var visited = {};
+  for(var bi=0;bi<buildings.length;bi++){
+    if(buildings[bi].isDestroyed||visited[bi])continue;
+    // 用简单的X距离聚类
+    var group={minX:9999,maxX:0,minY:9999,maxY:0};
+    for(var bj=bi;bj<buildings.length;bj++){
+      if(buildings[bj].isDestroyed||visited[bj])continue;
+      if(Math.abs(buildings[bj].x-group.minX)<S.s(80)||Math.abs(buildings[bj].x-group.maxX)<S.s(80)||
+         (buildings[bj].x>=group.minX-S.s(10)&&buildings[bj].x<=group.maxX+S.s(10))){
+        group.minX=Math.min(group.minX,buildings[bj].x);
+        group.maxX=Math.max(group.maxX,buildings[bj].x+buildings[bj].width);
+        group.minY=Math.min(group.minY,buildings[bj].y);
+        group.maxY=Math.max(group.maxY,buildings[bj].y+buildings[bj].height);
+        visited[bj]=true;
+      }
+    }
+    if(group.minX<9999)buildingGroups.push(group);
+  }
+
+  // 画建筑底部阴影/地基
+  buildingGroups.forEach(function(g){
+    var pad=S.s(6);
+    // 地基发光
+    ctx.fillStyle='rgba(0,240,255,0.04)';
+    ctx.fillRect(g.minX-pad,groundY-S.s(4),g.maxX-g.minX+pad*2,S.s(4));
+    // 建筑整体背景暗色衬底
+    ctx.fillStyle='rgba(10,20,50,0.3)';
+    ctx.fillRect(g.minX-pad,g.minY-pad,g.maxX-g.minX+pad*2,g.maxY-g.minY+pad*2);
+  });
+
+  // 画每个方块
   buildings.forEach(function(b){
     if(b.isDestroyed)return;
     var hp=b.health/b.maxHealth;
     var bc=C[b.type]||C.wood;
 
-    // 仅在低血量时使用shadowBlur（节省GPU）
-    if(hp<0.3){
-      ctx.save();
-      ctx.shadowColor=bc.glow;ctx.shadowBlur=10;
-      ctx.fillStyle=bc.fill;ctx.fillRect(b.x,b.y,b.width,b.height);
-      ctx.restore();
-    } else {
-      ctx.fillStyle=bc.fill;ctx.fillRect(b.x,b.y,b.width,b.height);
-    }
+    // 方块主体
+    ctx.fillStyle=bc.fill;ctx.fillRect(b.x,b.y,b.width,b.height);
 
     // 边框
-    ctx.strokeStyle=bc.stroke;ctx.lineWidth=S.s(2);ctx.strokeRect(b.x,b.y,b.width,b.height);
+    ctx.strokeStyle=bc.stroke;ctx.lineWidth=S.s(1.5);ctx.strokeRect(b.x,b.y,b.width,b.height);
 
     // 高光
     ctx.fillStyle='rgba(255,255,255,0.12)';ctx.fillRect(b.x+2,b.y+2,b.width-4,S.s(3));
 
     // 类型标记
-    ctx.font='bold '+S.s(14)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font='bold '+S.s(12)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillStyle='rgba(255,255,255,0.65)';
     var label=b.type==='wood'?'木':b.type==='brick'?'砖':b.type==='steel'?'钢':b.type==='ice'?'冰':b.type==='rubber'?'胶':b.type==='tnt'?'TNT':'?';
     ctx.fillText(label,b.x+b.width/2,b.y+b.height/2);
+
+    // 低血量发光
+    if(hp<0.3){
+      ctx.save();ctx.shadowColor=bc.glow;ctx.shadowBlur=8;
+      ctx.strokeStyle=bc.glow;ctx.lineWidth=S.s(1);ctx.strokeRect(b.x,b.y,b.width,b.height);
+      ctx.restore();
+    }
 
     // 裂纹
     if(hp<0.7){
@@ -994,12 +1035,12 @@ function drawBuildings(){
       for(var ci=0;ci<cn;ci++){ctx.beginPath();ctx.moveTo(b.x+b.width*(0.3+ci*0.2),b.y);ctx.lineTo(b.x+b.width*(0.4+ci*0.15),b.y+b.height*0.5);ctx.lineTo(b.x+b.width*(0.2+ci*0.3),b.y+b.height);ctx.stroke();}
     }
 
-    // 濒危闪烁（每3帧闪一次，减少重绘）
+    // 濒危闪烁
     if(hp<0.3&&frame%6<3){ctx.fillStyle='rgba(255,50,50,0.12)';ctx.fillRect(b.x,b.y,b.width,b.height);}
 
     // 血条
     if(hp<1){
-      var bw2=b.width*.8,bh2=S.s(3),bx2=b.x+(b.width-bw2)/2,by2=b.y-S.s(7);
+      var bw2=b.width*.8,bh2=S.s(3),bx2=b.x+(b.width-bw2)/2,by2=b.y-S.s(6);
       ctx.fillStyle='rgba(0,0,0,0.4)';ctx.fillRect(bx2,by2,bw2,bh2);
       ctx.fillStyle=hp>.5?C.neonGreen:hp>.25?C.neonYellow:C.neonRed;
       ctx.fillRect(bx2,by2,bw2*hp,bh2);
@@ -1269,21 +1310,27 @@ function renderLevelSel(){
   // 页码 + 翻页
   var navY=startY+rows*(cellH+gapY)+S.s(6);
 
-  // 翻页按钮 - 大尺寸触控友好
-  var navBtnW=S.s(48),navBtnH=S.s(36),navGap=S.s(12);
+  // 翻页 - 紧凑居中排列 ◀ 页码 ▶
+  var navY=startY+rows*(cellH+gapY)+S.s(8);
+  var navBtnSize=S.s(42);
+  var pageW=S.s(100);
+  var totalNavW=navBtnSize+pageW+navBtnSize;
+  var navStartX=(canvas.width-totalNavW)/2;
+
+  // 页码背景
+  ctx.fillStyle='rgba(20,25,45,0.5)';
+  rr(ctx,navStartX+navBtnSize,navY,pageW,S.s(36),S.s(4));ctx.fill();
+  ctx.fillStyle=C.textMain;ctx.font=S.s(13)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText((page+1)+' / '+totalPage,navStartX+navBtnSize+pageW/2,navY+S.s(18));
 
   if(page>0){
-    drawNeonBtn(canvas.width/2-navGap/2-navBtnW-S.s(80),navY,navBtnW,navBtnH,'◀',C.neonCyan);
-    regBtn(canvas.width/2-navGap/2-navBtnW-S.s(80),navY,navBtnW,navBtnH,function(){gs.levelPage--;});
+    drawNeonBtn(navStartX,navY,navBtnSize,S.s(36),'◀',C.neonCyan);
+    regBtn(navStartX,navY,navBtnSize,S.s(36),function(){gs.levelPage--;});
   }
   if(page<totalPage-1){
-    drawNeonBtn(canvas.width/2+navGap/2+S.s(80),navY,navBtnW,navBtnH,'▶',C.neonCyan);
-    regBtn(canvas.width/2+navGap/2+S.s(80),navY,navBtnW,navBtnH,function(){gs.levelPage++;});
+    drawNeonBtn(navStartX+navBtnSize+pageW,navY,navBtnSize,S.s(36),'▶',C.neonCyan);
+    regBtn(navStartX+navBtnSize+pageW,navY,navBtnSize,S.s(36),function(){gs.levelPage++;});
   }
-
-  // 页码
-  ctx.fillStyle=C.textDim;ctx.font=S.s(12)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.fillText((page+1)+' / '+totalPage,canvas.width/2,navY+navBtnH/2);
 
   // 快捷跳转
   var jumpY=navY+navBtnH+S.s(10);
