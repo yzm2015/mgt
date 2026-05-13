@@ -1,13 +1,16 @@
 /**
- * 磁吸拆迁队 V3.1.3
+ * 磁吸拆迁队 V3.1.4
  * 版本规则：每次+0.0.1，逢十进一
  *
- * V3.1.3 更新：
- * - 排行榜：恢复人名列，按(人名+关卡)去重保留最高分
- * - TNT只炸1个最近建筑 + 爆炸波纹/火焰特效
- * - 拆迁工具放在建筑上方 + 未投掷前不碰撞计分
- * - 礼物/祝福语动画大幅增强（发光环/浮动/大号文字/收集特效）
- * - 界面优化：建筑纹理/地面渐变/大气雾效/火焰粒子/发光血条
+ * V3.1.4 更新：
+ * - 修复工具英文名→中文名（破坏球）
+ * - 修复主菜单英文→中文（磁吸拆迁队）
+ * - 全中文界面（连击/祝福语等）
+ * - 实现每10关新增玩法机制：
+ *   L1基础/L11TNT/L21冰块/L31橡胶/L41钢铁/L51连锁/L61侧风/L71限时/L81全灭/L91BOSS
+ * - 高级关卡递增难度（L101+沙漠/L201+冰域/L301+钢域/L401+火山/L501+混合/L701+极难/L901+炼狱）
+ * - BOSS建筑金色发光+血量显示
+ * - 侧风指示器+机制提示HUD
  */
 
 var PhysicsSystem = require('./js/PhysicsSystem');
@@ -16,7 +19,7 @@ var BuildingGenerator = require('./js/BuildingGenerator');
 var AudioManager = require('./js/AudioManager').AudioManager;
 var SoundNames = require('./js/AudioManager').SoundNames;
 
-var VERSION = '3.1.3';
+var VERSION = '3.1.4';
 
 // ===== 配色（统一管理）=====
 var C = {
@@ -50,6 +53,7 @@ var CONFIG = { gravity: 0.5, ropeLength: 150, magnetRadius: 80, magnetPower: 0.8
 var gs = {
   score: 0, timeLeft: 60, gameActive: false, gamePaused: false,
   currentLevel: 1, targetScore: 100, stars: 0, currentScene: 'menu',
+  gameResult: null, // V3.1.4: 存储endGame传入的win参数
   shake: 0, shakeX: 0, shakeY: 0, combo: 0, comboTimer: 0,
   flash: 0, pulse: 0, npcText: '', npcTimer: 0, npcQueue: [],
   userInfo: null, loggedIn: false, loginRetries: 0,
@@ -159,31 +163,24 @@ var dailySystem = {
   }
 };
 
-// ===== 玩法机制 =====
+// ===== 玩法机制（V3.1.4: 全部已实现）=====
 var MECHANICS = [
   { level:1, id:'basic', name:'基础', desc:'木质+砖块建筑', color:C.neonCyan },
   { level:11, id:'explosive', name:'爆破', desc:'解锁TNT炸药方块', color:C.neonRed },
   { level:21, id:'ice', name:'冰封', desc:'解锁冰块', color:C.ice.glow },
   { level:31, id:'rubber', name:'弹力', desc:'解锁橡胶块', color:C.rubber.glow },
-  { level:41, id:'steel', name:'钢铁', desc:'解锁钢块', color:C.steel.glow },
-  { level:51, id:'chain', name:'连锁', desc:'连锁爆炸', color:C.neonOrange },
-  { level:61, id:'wind', name:'风暴', desc:'侧风干扰', color:'#88ddff' },
-  { level:71, id:'timed', name:'限时', desc:'时间奖励', color:C.neonGreen },
-  { level:81, id:'multi', name:'多目标', desc:'多建筑摧毁', color:C.neonYellow },
-  { level:91, id:'boss', name:'BOSS', desc:'超级BOSS', color:C.neonPurple },
-  { level:101, id:'desert', name:'沙漠', desc:'沙漠主题', color:'#F4A460' },
-  { level:151, id:'pyramid', name:'金字塔', desc:'金字塔BOSS', color:'#DAA520' },
-  { level:201, id:'snow', name:'雪地', desc:'雪地主题', color:'#F0F8FF' },
-  { level:251, id:'frost', name:'霜冻', desc:'霜冻BOSS', color:'#00CED1' },
-  { level:301, id:'space', name:'太空', desc:'太空主题', color:'#191970' },
-  { level:351, id:'blackhole', name:'黑洞', desc:'黑洞BOSS', color:'#483D8B' },
-  { level:401, id:'volcano', name:'火山', desc:'火山主题', color:'#FF4500' },
-  { level:451, id:'magma', name:'岩浆', desc:'岩浆BOSS', color:'#DC143C' },
-  { level:501, id:'neon', name:'霓虹', desc:'霓虹主题', color:C.neonCyan },
-  { level:551, id:'virus', name:'病毒', desc:'病毒扩散', color:'#32CD32' },
-  { level:601, id:'ruins', name:'废墟', desc:'废墟高级', color:'#8B7355' },
-  { level:701, id:'permafrost', name:'永冻', desc:'永冻高级', color:'#B0E0E6' },
-  { level:801, id:'wormhole', name:'虫洞', desc:'虫洞高级', color:'#4169E1' },
+  { level:41, id:'steel', name:'钢铁', desc:'钢铁比例提升', color:C.steel.glow },
+  { level:51, id:'chain', name:'连锁', desc:'TNT连锁爆炸', color:C.neonOrange },
+  { level:61, id:'wind', name:'风暴', desc:'侧风干扰飞行', color:'#88ddff' },
+  { level:71, id:'timed', name:'限时', desc:'限时加分奖励', color:C.neonGreen },
+  { level:81, id:'multi', name:'全灭', desc:'需摧毁所有建筑', color:C.neonYellow },
+  { level:91, id:'boss', name:'首领', desc:'首领超高血量', color:C.neonPurple },
+  { level:101, id:'desert', name:'沙漠', desc:'难度提升+更多建筑', color:'#F4A460' },
+  { level:201, id:'snow', name:'雪地', desc:'冰块比例大增', color:'#F0F8FF' },
+  { level:301, id:'space', name:'太空', desc:'钢铁比例极高', color:'#191970' },
+  { level:401, id:'volcano', name:'火山', desc:'TNT比例大增', color:'#FF4500' },
+  { level:501, id:'neon', name:'霓虹', desc:'全材质混合', color:C.neonCyan },
+  { level:701, id:'extreme', name:'极难', desc:'侧风+连锁+BOSS', color:'#B0E0E6' },
   { level:901, id:'inferno', name:'炼狱', desc:'全机制融合', color:'#FF0000' }
 ];
 
@@ -761,17 +758,25 @@ function gameLoop() {
   nf(gameLoop);
 }
 
-// ===== 每帧更新 =====
+// ===== 每帧更新（V3.1.4: 含机制系统）=====
 function update() {
   crane.update();
   var gy=canvas.height-S.s(50);
+
+  // V3.1.4: 获取当前关卡机制参数
+  var lvlParams = bg.getParamsForLevel(gs.currentLevel);
+
   // 工具物理更新
   for(var i=0;i<tools.length;i++){
     var t=tools[i];
-    if(t.isGrabbed||!t.isActive||!t._thrown) continue; // V3.1.3: 未投掷工具不参与物理
+    if(t.isGrabbed||!t.isActive||!t._thrown) continue;
     // 限速
     t.velocityY = Math.max(-8, Math.min(8, t.velocityY + 0.4));
     t.velocityX = Math.max(-10, Math.min(10, t.velocityX));
+    // V3.1.4: 侧风效果（L61+）
+    if(lvlParams.windForce && !t.isGrabbed){
+      t.velocityX += lvlParams.windForce * (frame % 240 < 120 ? 1 : -1);
+    }
     t.x += t.velocityX;
     t.y += t.velocityY;
 
@@ -803,7 +808,7 @@ function update() {
           addFloat(cx,cy-S.s(10),Math.floor(actualDmg)+'伤害',C.neonOrange);
           // V3.1.3: 每次碰撞也有小概率掉祝福语（更大更醒目）
           if(Math.random()<0.15){
-            var msgs=['加油!','漂亮!','继续!','好球!','Nice!','超赞!','再来!'];
+            var msgs=['加油!','漂亮!','继续!','好球!','超赞!','再来!','厉害!'];
             addBigFloat(cx,cy-S.s(25),msgs[Math.floor(Math.random()*msgs.length)],C.neonYellow);
           }
           if(bld.health<=0){
@@ -831,36 +836,49 @@ function update() {
             spawnDebris(cx,cy,bld.color||C.neonOrange,6);
             spawnSparks(cx,cy,C.neonYellow,4);
             addFloat(cx,cy,'+'+pts,gs.combo>1?C.neonYellow:C.neonGreen);
-            if(gs.combo>=3){addFloat(cx,cy-S.s(25),gs.combo+'x COMBO!',C.neonPurple);gs.shake=Math.min(12,gs.combo*2);}
+            if(gs.combo>=3){addFloat(cx,cy-S.s(25),gs.combo+'x 连击!',C.neonPurple);gs.shake=Math.min(12,gs.combo*2);}
             try{audio.playSound(SoundNames.DESTROY);}catch(e){}
             NPC.show(NPC.say(gs.combo>2?'combo':'hit'),60);
             // V3.1.0: 礼物掉落
             tryDropGift(cx,cy);
             if(bld.explosive){
-              // V3.1.3: TNT只炸1个最近建筑 + 爆炸特效
+              // V3.1.3: TNT炸1个最近建筑 + 爆炸特效
+              // V3.1.4: 连锁爆炸（L51+）- 被炸的建筑如果是TNT也会再炸
               gs.shake=15;gs.flash=0.3;
               spawnDebris(cx,cy,C.neonRed,10);spawnSparks(cx,cy,C.neonYellow,8);
-              // 找最近1个存活建筑（排除自身）
-              var nearestBld=null,nearestDist=999;
-              for(var k=0;k<buildings.length;k++){
-                var bk=buildings[k];if(bk.isDestroyed||bk===bld)continue;
-                var dx2=(bk.x+bk.width/2)-cx,dy2=(bk.y+bk.height/2)-cy;
-                var d2=Math.sqrt(dx2*dx2+dy2*dy2);
-                if(d2<nearestDist){nearestDist=d2;nearestBld=bk;}
+              var chainQueue=[bld]; // V3.1.4: 连锁队列
+              var chainCount=0;
+              while(chainQueue.length>0 && chainCount<5){
+                var curExplosive=chainQueue.shift();
+                var ecx=curExplosive.x+curExplosive.width/2,ecy=curExplosive.y+curExplosive.height/2;
+                // 找最近1个存活建筑
+                var nearestBld2=null,nearestDist2=999;
+                for(var k=0;k<buildings.length;k++){
+                  var bk=buildings[k];if(bk.isDestroyed||bk===curExplosive)continue;
+                  var dx2=(bk.x+bk.width/2)-ecx,dy2=(bk.y+bk.height/2)-ecy;
+                  var d2=Math.sqrt(dx2*dx2+dy2*dy2);
+                  if(d2<nearestDist2){nearestDist2=d2;nearestBld2=bk;}
+                }
+                if(nearestBld2){
+                  nearestBld2.health=0;nearestBld2.isDestroyed=true;
+                  var nx=nearestBld2.x+nearestBld2.width/2,ny2=nearestBld2.y+nearestBld2.height/2;
+                  spawnDebris(nx,ny2,nearestBld2.color||C.neonRed,8);
+                  spawnSparks(nx,ny2,C.neonYellow,6);
+                  var bp=Math.max(1,nearestBld2.score||10);
+                  gs.score+=bp;
+                  addFloat(nx,ny2,'💥+'+bp,C.neonRed);
+                  addCollapse(nearestBld2);
+                  spawnExplosion(nx,ny2);
+                  // V3.1.4: 连锁 - 如果被炸的建筑也是TNT，加入队列
+                  if(nearestBld2.explosive && lvlParams && lvlParams.chainExplosion){
+                    chainQueue.push(nearestBld2);
+                    addBigFloat(nx,ny2-S.s(30),'🔥连锁爆炸!',C.neonOrange);
+                    chainCount++;
+                  }
+                }
+                spawnExplosion(ecx,ecy);
               }
-              if(nearestBld){
-                nearestBld.health=0;nearestBld.isDestroyed=true;
-                var nx=nearestBld.x+nearestBld.width/2,ny2=nearestBld.y+nearestBld.height/2;
-                spawnDebris(nx,ny2,nearestBld.color||C.neonRed,8);
-                spawnSparks(nx,ny2,C.neonYellow,6);
-                var bp=Math.max(1,nearestBld.score||10);
-                gs.score+=bp;
-                addFloat(nx,ny2,'💥+'+bp,C.neonRed);
-                addCollapse(nearestBld);
-                // 二次爆炸波纹
-                spawnExplosion(nx,ny2);
-              }
-              spawnExplosion(cx,cy);
+              if(chainCount>0) addFloat(cx,cy-S.s(50),'🔥×'+(chainCount+1)+'连锁!',C.neonOrange);
               addFloat(cx,cy-S.s(35),'💣TNT爆炸!',C.neonRed);
             }
             addCollapse(bld);
@@ -911,7 +929,7 @@ function update() {
     var rt=tools[ri];
     if(rt.isActive && !rt.isGrabbed){
       var rspd=Math.abs(rt.velocityX)+Math.abs(rt.velocityY);
-      if(rspd < 0.5 && rt.y + rt.height >= groundY2 - 3){
+      if(rspd < 0.5){ // V3.1.4: 不再要求在地面上，停在建筑顶部也重生
         if(!rt._stillTimer) rt._stillTimer = 0;
         rt._stillTimer++;
         if(rt._stillTimer > 60){
@@ -1071,7 +1089,7 @@ function handleGame(x,y,isTap){
 var TOOL_TYPES = {
   steelBall: { name: '钢球', hardness: 3.0, mass: 4.0, fill: '#8899AA', stroke: '#556677', glow: '#AACCDD', emoji: '⚫', desc: '硬·重' },
   ironHammer: { name: '铁锤', hardness: 2.5, mass: 3.0, fill: '#7788AA', stroke: '#445566', glow: '#99BBDD', emoji: '🔨', desc: '硬·中' },
-  wreckBall: { name: ' wrecking球', hardness: 2.0, mass: 3.5, fill: '#555566', stroke: '#333344', glow: '#888899', emoji: '⚽', desc: '中·重' },
+  wreckBall: { name: '破坏球', hardness: 2.0, mass: 3.5, fill: '#555566', stroke: '#333344', glow: '#888899', emoji: '⚽', desc: '中·重' },
   rubberBall: { name: '橡皮球', hardness: 0.8, mass: 1.0, fill: '#E840A0', stroke: '#A82070', glow: '#FF70C0', emoji: '🏀', desc: '弹·轻' },
   bomb: { name: '炸弹', hardness: 1.5, mass: 2.0, fill: '#FF5020', stroke: '#CC3000', glow: '#FF8040', emoji: '💣', desc: '爆·中' }
 };
@@ -1145,7 +1163,7 @@ function loadLevel(lv){
 
   gs.currentLevel=lv;
   gs.targetScore=bg.getTargetScore(lv);gs.timeLeft=bg.getTimeLimit(lv);
-  gs.score=0;gs.gameActive=true;gs.gamePaused=false;gs.currentScene='game';
+  gs.score=0;gs.gameActive=true;gs.gamePaused=false;gs.currentScene='game';gs.gameResult=null;
   gs.combo=0;gs.comboTimer=0;gs.slowMo=0;
   gs.gifts=[];gs.peakSwingAV=0;gs.powerUpHardness=0;gs.explosionEffects=[]; // V3.1.3: 重置爆炸特效
   particles.length=0;floats.length=0;
@@ -1159,14 +1177,28 @@ function loadLevel(lv){
 function clearTimer(){if(gameTimer){clearInterval(gameTimer);gameTimer=null;}}
 function startTimer(){clearTimer();gameTimer=setInterval(function(){
   if(!gs.gameActive||gs.gamePaused)return;gs.timeLeft--;
-  // 仅最后3秒震动提醒（减少震动频率）
+  // V3.1.4: 限时奖励（L71+）- 剩余时间>50%时每次+1分
+  var lvlParams=bg.getParamsForLevel(gs.currentLevel);
+  if(lvlParams.timeBonus&&gs.timeLeft>bg.getTimeLimit(gs.currentLevel)*0.5){
+    gs.score+=1;
+  }
   if(gs.timeLeft<=3&&gs.timeLeft>0){try{wx.vibrateShort({type:'light'});}catch(e){}audio.playSound(SoundNames.WARNING);if(gs.timeLeft<=3)NPC.show(NPC.say('lowtime'),60);}
   if(gs.timeLeft<=0){gs.timeLeft=0;endGame(false);}
 },1000);}
 
-function checkGameEnd(){if(gs.score>=gs.targetScore)endGame(true);}
+function checkGameEnd(){
+  var lvlParams=bg.getParamsForLevel(gs.currentLevel);
+  // V3.1.4: 多目标模式 - 必须摧毁所有建筑
+  if(lvlParams.multiTarget){
+    var allDead=true;
+    for(var i=0;i<buildings.length;i++){if(!buildings[i].isDestroyed){allDead=false;break;}}
+    if(allDead) endGame(true);
+    return;
+  }
+  if(gs.score>=gs.targetScore)endGame(true);
+}
 function endGame(win){
-  gs.gameActive=false;clearTimer();
+  gs.gameActive=false;gs.gameResult=win; // V3.1.4: 存储胜负结果
   var pct=gs.targetScore>0?gs.score/gs.targetScore:0;
   gs.stars=pct>=1?3:pct>=.8?2:pct>=.5?1:0;
   // V3.0.9: 只要得分>0就保存进度，通关自动解锁下一关
@@ -1300,7 +1332,7 @@ function renderMenu(){
   // 副标题
   ctx.save();ctx.globalAlpha=anim;
   ctx.fillStyle=C.textDim;ctx.font=S.s(10)+'px Arial';ctx.textAlign='center';
-  ctx.fillText('MAGNETIC DEMOLITION TEAM  V'+VERSION,canvas.width/2,titleY+S.s(30));
+  ctx.fillText('磁吸拆迁队  V'+VERSION,canvas.width/2,titleY+S.s(30));
   ctx.restore();
 
   // 脉冲环装饰
@@ -1495,6 +1527,12 @@ function drawBuildings(){
 
     // 边框 - V3.1.3: 更鲜明
     ctx.strokeStyle=bc.stroke;ctx.lineWidth=S.s(1.5);ctx.strokeRect(b.x,b.y,b.width,b.height);
+    // V3.1.4: BOSS建筑金色发光边框
+    if(b.isBoss){
+      ctx.save();ctx.shadowColor='#FFD700';ctx.shadowBlur=10;
+      ctx.strokeStyle='#FFD700';ctx.lineWidth=S.s(2.5);ctx.strokeRect(b.x,b.y,b.width,b.height);
+      ctx.restore();
+    }
 
     // 高光
     ctx.fillStyle='rgba(255,255,255,0.1)';ctx.fillRect(b.x+2,b.y+2,b.width-4,S.s(3));
@@ -1503,7 +1541,16 @@ function drawBuildings(){
     ctx.font='bold '+S.s(12)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillStyle='rgba(255,255,255,0.65)';
     var label=b.type==='wood'?'木':b.type==='brick'?'砖':b.type==='steel'?'钢':b.type==='ice'?'冰':b.type==='rubber'?'胶':b.type==='tnt'?'💣':'?';
-    ctx.fillText(label,b.x+b.width/2,b.y+b.height/2);
+    // V3.1.4: BOSS建筑特殊标记
+    if(b.isBoss){
+      ctx.fillStyle=C.neonRed;
+      ctx.font='bold '+S.s(14)+'px Arial';
+      ctx.fillText('👑首领',b.x+b.width/2,b.y+b.height/2-S.s(4));
+      ctx.font=S.s(9)+'px Arial';ctx.fillStyle=C.neonYellow;
+      ctx.fillText(Math.ceil(b.health)+'血',b.x+b.width/2,b.y+b.height/2+S.s(10));
+    }else{
+      ctx.fillText(label,b.x+b.width/2,b.y+b.height/2);
+    }
 
     // 低血量发光
     if(hp<0.3){
@@ -1739,12 +1786,31 @@ function drawHUD(){
     ctx.fillText('⚡强化×'+gs.powerUpHardness,S.sx(10),ty+th+S.s(14));
   }
 
+  // V3.1.4: 侧风指示器
+  var lvlParams2=bg.getParamsForLevel(gs.currentLevel);
+  if(lvlParams2.windForce>0){
+    var windDir=frame%240<120?'→':'←';
+    var windStr=windDir+(lvlParams2.windForce>0.1?'强风':'微风');
+    ctx.fillStyle='#88ddff';ctx.font=S.s(10)+'px Arial';ctx.textAlign='right';
+    ctx.fillText('🌬 '+windStr,canvas.width-S.sx(10),ty+th+S.s(14));
+  }
+  // V3.1.4: 多目标/限时机制提示
+  if(lvlParams2.multiTarget){
+    var aliveCount=0;for(var ai=0;ai<buildings.length;ai++){if(!buildings[ai].isDestroyed)aliveCount++;}
+    ctx.fillStyle=C.neonYellow;ctx.font=S.s(9)+'px Arial';ctx.textAlign='right';
+    ctx.fillText('全灭模式 剩余:'+aliveCount,canvas.width-S.sx(10),ty+th+S.s(24));
+  }
+  if(lvlParams2.timeBonus&&gs.timeLeft>bg.getTimeLimit(gs.currentLevel)*0.5){
+    ctx.fillStyle=C.neonGreen;ctx.font=S.s(9)+'px Arial';ctx.textAlign='left';
+    ctx.fillText('⏱ 限时加分中',S.sx(10),ty+th+S.s(24));
+  }
+
   // 连击显示（V3.0.9增强）
   if(gs.combo>=2){
     var comboAlpha=0.6+Math.sin(gs.pulseTime*6)*0.4;
     ctx.save();
     ctx.fillStyle=hex2rgba(C.neonPurple,comboAlpha);ctx.font='bold '+S.s(20)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
-    ctx.fillText(gs.combo+'x COMBO!',canvas.width/2,ty+th+S.s(26));
+    ctx.fillText(gs.combo+'x 连击!',canvas.width/2,ty+th+S.s(26));
     // 连击倍率提示
     var comboMult=(1+gs.combo*0.25).toFixed(2);
     ctx.fillStyle=hex2rgba(C.neonYellow,comboAlpha*0.7);ctx.font=S.s(10)+'px Arial';
@@ -1778,7 +1844,7 @@ function drawPause(){
 // ===== 结算 =====
 function renderGameOver(){
   ctx.fillStyle='rgba(5,10,30,0.92)';ctx.fillRect(0,0,canvas.width,canvas.height);
-  var win=gs.score>=gs.targetScore;
+  var win=gs.gameResult!==null?gs.gameResult:(gs.score>=gs.targetScore); // V3.1.4: 优先用endGame传入的结果
   var cx=canvas.width/2;
   // V3.1.2: 面板高度加大到500，确保所有按钮都在框内
   var pw=S.s(310),ph=S.s(500);

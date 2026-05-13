@@ -43,16 +43,59 @@ class BuildingGenerator {
 
   calculateLevelParams(level, random) {
     const params = {
-      buildingCount: 3 + Math.floor(level / 15),  // 建筑数量（不是方块数量）
-      maxFloors: 3 + Math.floor(level / 25),       // 最高层数
+      buildingCount: 3 + Math.floor(level / 15),
+      maxFloors: 3 + Math.floor(level / 25),
       woodRatio: 0.5, brickRatio: 0.3, steelRatio: 0.2,
       iceRatio: 0, rubberRatio: 0, tntRatio: 0,
       timeLimit: Math.max(30, 90 - Math.floor(level / 10)),
-      targetScore: Math.floor(40 + level * 8 + Math.floor(level/5) * 15)  // V3.1.0: 由易到难 L1=63 L10=190 L50=790
+      targetScore: Math.floor(40 + level * 8 + Math.floor(level/5) * 15),
+      // V3.1.4: 新增机制参数
+      chainExplosion: false,  // L51+: 连锁爆炸（TNT炸毁建筑也会引爆相邻TNT）
+      windForce: 0,           // L61+: 侧风干扰（飞行中的工具受侧向力）
+      timeBonus: false,       // L71+: 限时奖励（快速击毁额外加分）
+      multiTarget: false,     // L81+: 多目标（需要摧毁所有建筑才能过关）
+      bossLevel: false,       // L91+: BOSS关（每10关有1个超高血量BOSS建筑）
+      steelRatioBoost: false  // L41+: 钢铁比例提升
     };
+    // L11: 解锁TNT
     if (level >= 11) params.tntRatio = 0.05;
+    // L21: 解锁冰块
     if (level >= 21) params.iceRatio = 0.1;
+    // L31: 解锁橡胶
     if (level >= 31) params.rubberRatio = 0.1;
+    // L41: 钢铁比例提升
+    if (level >= 41) { params.steelRatioBoost = true; params.woodRatio = 0.3; params.brickRatio = 0.3; params.steelRatio = 0.4; }
+    // L51: 连锁爆炸
+    if (level >= 51) params.chainExplosion = true;
+    // L61: 侧风干扰
+    if (level >= 61) params.windForce = Math.min(0.15, 0.03 + (level - 61) * 0.002);
+    // L71: 限时奖励
+    if (level >= 71) params.timeBonus = true;
+    // L81: 多目标
+    if (level >= 81) params.multiTarget = true;
+    // L91: BOSS关
+    if (level >= 91 && level % 10 >= 1 && level % 10 <= 3) params.bossLevel = true;
+    // V3.1.4: 高级阶段难度递增
+    if (level >= 101) { params.buildingCount = Math.min(5, 3 + Math.floor(level / 50)); } // 更多建筑
+    if (level >= 201) { params.iceRatio = Math.min(0.3, 0.1 + (level - 200) * 0.001); } // 冰块增加
+    if (level >= 301) { params.steelRatio = 0.5; params.woodRatio = 0.15; params.brickRatio = 0.15; } // 钢铁主导
+    if (level >= 401) { params.tntRatio = Math.min(0.15, 0.05 + (level - 400) * 0.001); } // TNT增加
+    if (level >= 501) { // 全混合
+      params.woodRatio = 0.2; params.brickRatio = 0.2; params.steelRatio = 0.25;
+      params.iceRatio = 0.15; params.rubberRatio = 0.1; params.tntRatio = 0.1;
+    }
+    if (level >= 701) { // 极难：强风+连锁
+      params.windForce = Math.min(0.25, 0.1 + (level - 700) * 0.002);
+      params.chainExplosion = true;
+      params.bossLevel = level % 20 >= 1 && level % 20 <= 3;
+    }
+    if (level >= 901) { // 炼狱：全机制
+      params.chainExplosion = true;
+      params.windForce = 0.25;
+      params.timeBonus = true;
+      params.multiTarget = true;
+      params.bossLevel = level % 15 >= 1 && level % 15 <= 5;
+    }
     return params;
   }
 
@@ -64,67 +107,45 @@ class BuildingGenerator {
     const W = this.canvas.width;
     const H = this.canvas.height;
     const groundY = H - 50;
-    
-    // 方块尺寸 - 适中，不要太大也不要太小
+
     const bw = Math.max(40, Math.min(55, W / 7));
     const bh = Math.max(35, Math.min(45, bw * 0.8));
-    const gap = 2; // 方块之间微小间隙
-    
-    // 计算建筑群分布
+    const gap = 2;
+
     const buildingCount = Math.min(params.buildingCount, 4);
-    
-    // 将屏幕水平空间分配给建筑
-    const totalUsableWidth = W - 40; // 左右各留20px
+    const totalUsableWidth = W - 40;
     const buildingSpacing = totalUsableWidth / buildingCount;
-    
+
     for (let b = 0; b < buildingCount; b++) {
-      // 每个建筑的中心X
       const centerX = 20 + buildingSpacing * b + buildingSpacing / 2;
-      
-      // 每个建筑的宽度（列数）和高度（行数）
-      const cols = 2 + Math.floor(random() * 3); // 2-4列宽
-      const floors = 2 + Math.floor(random() * params.maxFloors); // 2到maxFloors层
-      const actualFloors = Math.min(floors, 8); // 最多8层
-      
-      // 建筑的总宽度
+      const cols = 2 + Math.floor(random() * 3);
+      const floors = 2 + Math.floor(random() * params.maxFloors);
+      const actualFloors = Math.min(floors, 8);
       const buildingWidth = cols * (bw + gap) - gap;
       const startX = centerX - buildingWidth / 2;
-      
-      // 逐层逐列生成方块
+
       for (let floor = 0; floor < actualFloors; floor++) {
         for (let col = 0; col < cols; col++) {
           const blockType = this.selectBlockType(params, random);
           const blockTypeDef = this.blockTypes[blockType];
-          
+
           const x = startX + col * (bw + gap);
           const y = groundY - (floor + 1) * (bh + gap);
-          
-          // 确保方块在屏幕内
+
           if (x < 5 || x + bw > W - 5) continue;
-          if (y < 80) continue; // 不超过起重机区域
-          
+          if (y < 80) continue;
+
           this.buildings.push({
-            x: x,
-            y: y,
-            width: bw,
-            height: bh,
-            type: blockType,
-            color: blockTypeDef.color,
-            strokeColor: blockTypeDef.strokeColor,
-            health: blockTypeDef.health,
-            maxHealth: blockTypeDef.health,
-            mass: blockTypeDef.mass,
-            score: blockTypeDef.score,
-            friction: blockTypeDef.friction,
-            velocityX: 0,
-            velocityY: 0,
-            isGrabbed: false,
-            isDestroyed: false,
+            x, y, width: bw, height: bh, type: blockType,
+            color: blockTypeDef.color, strokeColor: blockTypeDef.strokeColor,
+            health: blockTypeDef.health, maxHealth: blockTypeDef.health,
+            mass: blockTypeDef.mass, score: blockTypeDef.score, friction: blockTypeDef.friction,
+            velocityX: 0, velocityY: 0, isGrabbed: false, isDestroyed: false,
             explosive: blockTypeDef.explosive || false
           });
         }
       }
-      
+
       // 有概率在建筑顶部放TNT（10关以后）
       if (level >= 11 && random() < 0.3 && actualFloors > 2) {
         const topY = groundY - actualFloors * (bh + gap);
@@ -138,6 +159,23 @@ class BuildingGenerator {
           });
         }
       }
+    }
+
+    // V3.1.4: BOSS关 - 添加1个超大血量BOSS建筑
+    if (params.bossLevel) {
+      const bossW = Math.min(W * 0.35, bw * 4);
+      const bossH = bh * 2;
+      const bossX = (W - bossW) / 2;
+      const bossY = groundY - bossH - 2;
+      const bossHealth = 80 + level * 2; // 超高血量
+      this.buildings.push({
+        x: bossX, y: bossY, width: bossW, height: bossH, type: 'steel',
+        color: '#FFD700', strokeColor: '#B8860B',
+        health: bossHealth, maxHealth: bossHealth,
+        mass: 5.0, score: Math.floor(bossHealth * 2), friction: 1.0,
+        velocityX: 0, velocityY: 0, isGrabbed: false, isDestroyed: false,
+        explosive: false, isBoss: true  // V3.1.4: BOSS标记
+      });
     }
   }
 
@@ -161,16 +199,27 @@ class BuildingGenerator {
   }
 
   getMechanics(level) {
+    // V3.1.4: 与 game.js MECHANICS 数组对齐
     const mechanicSet = [
       { level: 1, mechanic: 'basic', description: '基础玩法' },
       { level: 11, mechanic: 'explosive', description: '爆炸方块' },
       { level: 21, mechanic: 'ice', description: '冰块' },
-      { level: 31, mechanic: 'rubber', description: '橡胶块' }
+      { level: 31, mechanic: 'rubber', description: '橡胶块' },
+      { level: 41, mechanic: 'steel', description: '钢铁强化' },
+      { level: 51, mechanic: 'chain', description: '连锁爆炸' },
+      { level: 61, mechanic: 'wind', description: '侧风干扰' },
+      { level: 71, mechanic: 'timed', description: '限时奖励' },
+      { level: 81, mechanic: 'multi', description: '多目标' },
+      { level: 91, mechanic: 'boss', description: 'BOSS关' }
     ];
     for (let i = mechanicSet.length - 1; i >= 0; i--) {
       if (level >= mechanicSet[i].level) return [mechanicSet[i]];
     }
     return [mechanicSet[0]];
+  }
+
+  getParamsForLevel(level) {
+    return this.calculateLevelParams(level, this.seededRandom(level * 12345));
   }
 
   seededRandom(seed) {
