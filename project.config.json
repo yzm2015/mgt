@@ -1,7 +1,152 @@
 {
-  "description": "磁吸拆迁队 - 微信小游戏",
+  "description": "磁吸拆迁队 V9 - 共享云存档",
   "packOptions": {
-    "ignore": [],
+    "ignore": [
+      {
+        "value": "preview-v5.png",
+        "type": "file"
+      },
+      {
+        "value": "legacy",
+        "type": "folder"
+      },
+      {
+        "value": "tests",
+        "type": "folder"
+      },
+      {
+        "value": "js",
+        "type": "folder"
+      },
+      {
+        "value": "open-data",
+        "type": "folder"
+      },
+      {
+        "value": "images",
+        "type": "folder"
+      },
+      {
+        "value": "server.js",
+        "type": "file"
+      },
+      {
+        "value": "package.json",
+        "type": "file"
+      },
+      {
+        "value": "package-lock.json",
+        "type": "file"
+      },
+      {
+        "value": "README.md",
+        "type": "file"
+      },
+      {
+        "value": "VALIDATION_PLAN.md",
+        "type": "file"
+      },
+      {
+        "value": "GAME_DESIGN.md",
+        "type": "file"
+      },
+      {
+        "value": "test.html",
+        "type": "file"
+      },
+      {
+        "value": "src/core.js",
+        "type": "file"
+      },
+      {
+        "value": "src/app.js",
+        "type": "file"
+      },
+      {
+        "value": "create-project.sh",
+        "type": "file"
+      },
+      {
+        "value": "preview-v6.png",
+        "type": "file"
+      },
+      {
+        "value": "gameplay-v6.png",
+        "type": "file"
+      },
+      {
+        "value": "module-v7.png",
+        "type": "file"
+      },
+      {
+        "value": "scripts",
+        "type": "folder"
+      },
+      {
+        "value": "cloudfunctions",
+        "type": "folder"
+      },
+      {
+        "value": "SHARED_CLOUD.md",
+        "type": "file"
+      },
+      {
+        "value": "cloud-status.local.json",
+        "type": "file"
+      },
+      {
+        "value": "cloud-deploy.local.json",
+        "type": "file"
+      },
+      {
+        "value": "cloud-deploy-mgt_gateway.local.json",
+        "type": "file"
+      },
+      {
+        "value": "cloud-deploy-cloudbase_auth.local.json",
+        "type": "file"
+      },
+      {
+        "value": "official-sharing.local.html",
+        "type": "file"
+      },
+      {
+        "type": "file",
+        "value": "icons-v8.png"
+      },
+      {
+        "type": "file",
+        "value": "home-v8.png"
+      },
+      {
+        "type": "folder",
+        "value": ".cloud-backup"
+      },
+      {
+        "type": "file",
+        "value": "game-storage.local.json"
+      },
+      {
+        "type": "file",
+        "value": "gateway-update.local.json"
+      },
+      {
+        "type": "file",
+        "value": "cloud-save-v9.png"
+      },
+      {
+        "value": "cloud-smoke.local.json",
+        "type": "file"
+      },
+      {
+        "value": "gateway-verified.local.json",
+        "type": "file"
+      },
+      {
+        "value": "CLOUD_VALIDATION.md",
+        "type": "file"
+      }
+    ],
     "include": []
   },
   "setting": {
@@ -35,7 +180,10 @@
       "disablePlugins": [],
       "outputPath": ""
     },
-    "condition": false
+    "condition": false,
+    "compileWorklet": false,
+    "localPlugins": false,
+    "useCompilerPlugins": false
   },
   "compileType": "game",
   "libVersion": "3.3.4",
@@ -45,5 +193,7 @@
   "editorSetting": {
     "tabIndent": "insertSpaces",
     "tabSize": 2
-  }
+  },
+  "simulatorPluginLibVersion": {},
+  "isGameTourist": false
 }
