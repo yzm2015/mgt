@@ -49,9 +49,9 @@ test('app input completes a yard, awards once, persists upgrades and pauses in b
   [[126,535],[193,564],[274,537],[280,410],[174,411],[100,417],[30,400],[30,350],[30,415],[175,415],[183,347],[199,348],[270,370],[349,365],[349,297]].forEach(p=>move(...p));
   assert.equal(g.demolished,3);
   for(let i=0;i<150&&!g.done;i++){if(g.cargo.length>=g.capacity()||(!g.scrap.length&&g.cargo.length))move(67,584);else if(g.scrap.length)move(g.scrap[0].x,g.scrap[0].y);}
-  assert.ok(g.done);assert.equal(stored.level,2);assert.equal(stored.coins,g.delivered+30+g.contractBonus);assert.equal(stored.records.completed,1);assert.equal(stored.records.bestScore,g.score);assert.equal(stored.records.recent[0].level,1);const balance=stored.coins;frames(120);assert.equal(stored.coins,balance);assert.equal(stored.records.completed,1);assert.equal(events.filter(e=>e[0]==='yard_complete').length,1);
-  click(100,517);click(100,637);click(100,380);assert.equal(stored.upgrades.magnet,1);assert.equal(stored.coins,balance-40);
-  click(100,640);click(275,637);assert.equal(g.upgrades.magnet,0,'daily challenges use equal equipment');
+  assert.ok(g.done);assert.equal(stored.level,2);assert.equal(stored.coins,g.delivered+30+g.contractBonus+60+15*core.stageStars(g));assert.equal(stored.records.completed,1);assert.equal(stored.records.bestScore,g.score);assert.equal(stored.records.recent[0].level,1);const balance=stored.coins;frames(120);assert.equal(stored.coins,balance);assert.equal(stored.records.completed,1);assert.equal(events.filter(e=>e[0]==='yard_complete').length,1);
+  click(100,517);click(100,436);assert.equal(stored.upgrades.magnet,1);assert.equal(stored.coins,balance-40);
+  click(100,660);click(275,637);assert.equal(g.upgrades.magnet,0,'daily challenges use equal equipment');
 });
 test('WeChat entry registers lifecycle, touch, storage, sharing and canvas with mocked SDK',()=>{
   const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),{createRequire}=require('node:module');

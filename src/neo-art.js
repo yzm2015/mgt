@@ -75,7 +75,8 @@
       ctx.save();ctx.translate(x,y);ctx.scale(size/24,size/24);ctx.strokeStyle=color||cyan;ctx.fillStyle=color||cyan;ctx.lineWidth=1.7;ctx.lineCap='round';ctx.lineJoin='round';
       function stroke(points,close){ctx.beginPath();points.forEach(function(p,i){if(i)ctx.lineTo(p[0],p[1]);else ctx.moveTo(p[0],p[1]);});if(close)ctx.closePath();ctx.stroke();}
       function dot(px,py,r){ctx.beginPath();ctx.arc(px,py,r,0,Math.PI*2);ctx.stroke();}
-      if(name==='star'){var points=[];for(var si=0;si<10;si++){var a=-Math.PI/2+si*Math.PI/5,r=si%2?4.5:10;points.push([Math.cos(a)*r,Math.sin(a)*r]);}stroke(points,true);}
+      if(name==='gift'){stroke([[-9,-2],[9,-2],[9,9],[-9,9]],true);stroke([[-11,-6],[11,-6],[11,-2],[-11,-2]],true);line(0,-6,0,9,color);stroke([[0,-6],[-6,-10],[-8,-9],[-7,-6],[0,-6],[6,-10],[8,-9],[7,-6]],false);}
+      else if(name==='star'){var points=[];for(var si=0;si<10;si++){var a=-Math.PI/2+si*Math.PI/5,r=si%2?4.5:10;points.push([Math.cos(a)*r,Math.sin(a)*r]);}stroke(points,true);}
       else if(name==='lock'){stroke([[-7,-1],[7,-1],[7,9],[-7,9]],true);ctx.beginPath();ctx.arc(0,-3,5,Math.PI,0);ctx.stroke();line(-5,-3,-5,-1,color);line(5,-3,5,-1,color);line(0,3,0,6,color);}
       else if(name==='route'){stroke([[-8,8],[-8,-7],[7,-7],[7,7]]);dot(-8,8,3);dot(7,7,3);dot(7,-7,2);}
       else if(name==='shield'){stroke([[0,-11],[9,-7],[7,3],[0,11],[-7,3],[-9,-7]],true);stroke([[-4,0],[-1,4],[5,-4]]);}

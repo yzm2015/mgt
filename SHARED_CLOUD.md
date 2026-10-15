@@ -1,4 +1,4 @@
-# V9.2 共享云功能
+# V9.3 共享云功能
 
 资源方：D:/openaiwork/02zyzsHelper/zhiyuan-v4，AppID wx0ece3f0f726260d2。
 游戏 AppID wx775f636a27645c9d，共享环境 zhiyuanzhushou-d5ghren6ta5622bdc（上海）。共享授权与小游戏初始化健康检查此前已验证。
@@ -21,7 +21,7 @@ health/load/save 为原接口；login/leaderboard/raceStart/raceFinish 为新增
 
 ## 运维
 
-- npm test：34 项，涵盖玩法、界面交互、身份边界、竞速事务、分享参数、八关实际移动通关与存档兼容。
+- npm test：43 项，涵盖玩法、界面交互、身份边界、竞速事务、分享参数、八关实际移动通关与存档兼容。
 - node scripts/prepare-social-storage.cjs：只创建 mgt_races/mgt_scores 私有集合及游戏索引。
 - node scripts/verify-social-storage.cjs：随机隔离测试账号验证真实数据库读写，完成后移除临时记录。
 - node scripts/verify-cloud-storage.cjs：真实存档事务回归，不操作真实玩家存档。
@@ -33,3 +33,9 @@ SDK 的管理端调用拥有资源方权限，可能保留平台运行上下文�
 私钥、临时凭据、云端代码备份及本地验证回执不入 Git 或前端代码包。新增功能前备份在 .cloud-backup/mgt-gateway-before-social，原始备份在 .cloud-backup/mgt-gateway-before-save。
 
 V9.2.0 已于 2026-10-15 使用登录账号“小明大爱”通过官方微信开发者工具 CLI 上传为开发版本，代码包 54,780 字节；未提审或发布。
+
+## V9.3 存档扩展
+
+新增 progression（经验、零件、底盘、每日委托进度与领取标记）及 upgrades.engine/reactor/drone。服务端校验整数范围、底盘解锁门槛、已知且不重复的领奖键；旧存档缺少字段时默认 0 与先锋底盘。成长属于单机奖励，不提供支付或排名奖励。升级、装备切换、领奖均需本机保存成功，失败回退；结算保存失败支持重试。新字段已通过真实数据库备份、读回和版本冲突验证。
+
+本轮仅更新 mgt_gateway 的存档校验，7 份部署文件哈希已核对一致，没有新增集合或修改资源方业务函数。更新前网关备份在 .cloud-backup/mgt-gateway-before-growth。V9.3.0 已于 2026-10-15 由“小明大爱”上传开发版本，包体 65,247 字节，未提审或发布。

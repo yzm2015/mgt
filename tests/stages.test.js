@@ -8,8 +8,8 @@ function route(g,target){
  for(let h=0;h<queue.length&&!parents.has(goal);h++){const i=queue[h],n=nodes[i];for(const [dx,dy]of [[10,0],[-10,0],[0,10],[0,-10]]){const next=lookup.get((n.x+dx)+':'+(n.y+dy));if(next!==undefined&&!parents.has(next)){parents.set(next,i);queue.push(next);}}}
  assert.ok(parents.has(goal),'route to target must remain reachable');let i=goal,path=[];while(i!==null){path.unshift(nodes[i]);i=parents.get(i);}for(const p of path){g.move(p.x,p.y);tick(g,.12);}g.target=null;tick(g,.3);
 }
-test('all eight authored yards can be completed with real movement and zero upgrades',()=>{
- for(const stage of core.stages){const g=new core.Game(core.hash('yard-'+stage.id),stage.id,{magnet:0,cargo:0},{stage:stage.id});
+test('all eight standard and storm contracts can be completed with real movement and zero upgrades',()=>{
+ for(const risk of [false,true])for(const stage of core.stages){const g=new core.Game(core.hash('yard-'+stage.id),stage.id,{magnet:0,cargo:0},{stage:stage.id,risk});
   assert.equal(g.stage.name,stage.name);for(let attempts=0;g.demolished<3&&attempts<20;attempts++){const b=g.buildings.find(b=>b.state==='standing'),a=b.bolts.find(a=>!a.removed);route(g,a);g.activate();tick(g,4);}
   assert.equal(g.demolished,3,stage.name+' must allow all anchors to be reached');tick(g,2);
   for(let trips=0;!g.done&&trips<180;trips++){if(g.cargo.length>=g.capacity()){g.dispatch();tick(g,17);}else if(g.scrap.length)route(g,g.scrap[0]);else{g.dispatch();tick(g,17);}}

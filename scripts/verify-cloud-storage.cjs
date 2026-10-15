@@ -9,7 +9,7 @@ const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypt
  try{
   const acl=await manager.commonService().call({Action:'DescribeDatabaseACL',Param:{EnvId:environment,CollectionName:'mgt_saves'}});assert.equal(acl.AclTag,'ADMINONLY');report.checks.push('private ACL');
   assert.equal(await storage.load(id),null);report.checks.push('empty read');
-  const save={level:1,coins:0,upgrades:{magnet:0,cargo:0},stageBest:{},dailyBest:{},records:{completed:0,bestScore:0,maxCombo:0,recovered:0,recent:[]}};
+  const save=require('../src/salvage-core').cleanSave({});save.progression={xp:720,parts:12,rig:'striker',daily:{date:require('../src/salvage-core').day(),yards:2,recycle:140,chain:6,claimed:['yards']}};save.upgrades.engine=2;save.upgrades.reactor=1;save.upgrades.drone=3;save.stageBest[1]={stars:3,seconds:75};
   const first=await storage.save(id,save,0);assert.equal(first.ok,true);assert.equal(first.revision,1);report.checks.push('first backup');
   const loaded=await storage.load(id);assert.deepEqual(loaded.save,save);assert.equal(loaded.revision,1);report.checks.push('readback');
   const stale=await storage.save(id,Object.assign({},save,{coins:999}),0);assert.equal(stale.code,'MGT_SAVE_CONFLICT');assert.equal((await storage.load(id)).save.coins,0);report.checks.push('stale revision rejected');
