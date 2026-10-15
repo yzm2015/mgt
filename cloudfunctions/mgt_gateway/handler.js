@@ -5,11 +5,12 @@ const crypto=require('crypto'),schema=require('./save-schema');
 exports.handle=function(event,context,store){
   if(!context || context.FROM_APPID!==GAME_APPID || !context.FROM_OPENID) return {ok:false,code:'MGT_CALLER_DENIED'};
   if(!event)return{ok:false,code:'MGT_ACTION_DENIED'};
-  if(event.action==='health')return {ok:true,namespace:'mgt',version:2,features:{cloudSave:!!store,leaderboard:false},serverTime:Date.now()};
-  if(!store||!['load','save'].includes(event.action))return{ok:false,code:'MGT_ACTION_DENIED'};
+  if(event.action==='health')return {ok:true,namespace:'mgt',version:3,features:{cloudSave:!!store,leaderboard:!!(store&&store.social)},serverTime:Date.now()};
+  if(!store||!['load','save','login','leaderboard','raceStart','raceFinish'].includes(event.action))return{ok:false,code:'MGT_ACTION_DENIED'};
   const id=crypto.createHash('sha256').update(GAME_APPID+':'+context.FROM_OPENID).digest('hex');
   return(async()=>{
    try{
+    if(['login','leaderboard','raceStart','raceFinish'].includes(event.action)){if(!store.social)return{ok:false,code:'MGT_SOCIAL_NOT_ENABLED'};return await require('./social').handle(event,id,store.social);}
     if(event.action==='load'){const record=await store.load(id);return{ok:true,namespace:'mgt',revision:record?record.revision:0,save:record?record.save:null,updatedAt:record?record.updatedAt:0};}
     if(!Number.isSafeInteger(event.expectedRevision)||event.expectedRevision<0)return{ok:false,code:'MGT_BAD_REVISION'};
     const save=schema.validate(event.save),result=await store.save(id,save,event.expectedRevision);return Object.assign({namespace:'mgt'},result);

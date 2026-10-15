@@ -60,7 +60,7 @@ test('WeChat entry registers lifecycle, touch, storage, sharing and canvas with 
   const canvas={getContext:()=>context};const wx={createCanvas:()=>canvas,getWindowInfo:()=>({windowWidth:390,windowHeight:844,pixelRatio:2,safeArea:{top:44,bottom:810}}),getMenuButtonBoundingClientRect:()=>({bottom:76}),showShareMenu:()=>{},onShareAppMessage:fn=>{handlers.share=fn;},getLaunchOptionsSync:()=>({query:{}}),getStorageSync:()=>'',setStorageSync:()=>{},reportEvent:()=>{},vibrateShort:()=>{},shareAppMessage:()=>{}};
   for(const name of ['onHide','onShow','onTouchStart','onTouchMove','onTouchEnd','onTouchCancel'])wx[name]=fn=>{handlers[name]=fn;};
   vm.runInNewContext(fs.readFileSync(file,'utf8'),{wx,require:createRequire(file),requestAnimationFrame:fn=>{frame=fn;}});
-  frame(1000);assert.equal(canvas.width,780);assert.equal(canvas.height,1688);assert.equal(handlers.share().query,'mode=daily');
+  frame(1000);assert.equal(canvas.width,780);assert.equal(canvas.height,1688);assert.equal(handlers.share().query,'mode=daily&date='+core.day());
   handlers.onTouchStart({touches:[{clientX:100,clientY:670}]});handlers.onTouchCancel({changedTouches:[{clientX:100,clientY:670}]});handlers.onHide();frame(2000);handlers.onShow();frame(3000);
   assert.ok(handlers.onTouchEnd);assert.ok(handlers.onTouchMove);
 });
@@ -124,8 +124,8 @@ test('icon navigation, skill hit areas and pause/resume work without matching bu
  function frames(n=2){texts=[];for(let i=0;i<n;i++){now+=1000/60;frame(now);}}
  function click(x,y){input('down',{x,y});input('up',{x,y});frames();}
  frames();click(79,485);assert.ok(texts.includes('驾驶手册'));click(100,650);
- click(195,485);assert.ok(texts.includes('任务档案'));assert.ok(texts.includes('完成第一场任务，点亮你的档案'));click(100,650);
- click(311,485);assert.ok(texts.includes('浏览器离线试玩'));assert.ok(texts.includes('云存档与排行榜尚未开放'));click(100,650);
+ click(195,485);assert.ok(texts.includes('城市拆解航图'));click(100,620);assert.ok(texts.includes('任务档案'));assert.ok(texts.includes('完成第一场任务，点亮你的档案'));click(100,650);
+ click(311,485);assert.ok(texts.includes('浏览器离线试玩'));assert.ok(texts.includes('浏览器离线试玩；微信内可使用存档和排行榜'));click(100,650);
  click(100,578);click(313,674);assert.ok(g.boost>0);assert.ok(g.extracted>0);
  g.cargo=[{x:g.car.x,y:g.car.y}];click(77,674);assert.equal(g.delivered,1);assert.equal(g.cargo.length,0);
  click(195,674);assert.ok(g.dashCooldown>0);click(346,30);const t=g.time;frames(60);assert.equal(g.time,t);click(100,376);frames(10);assert.ok(g.time>t);

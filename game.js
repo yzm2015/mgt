@@ -11,9 +11,16 @@ var safeTop = Math.max(info.safeArea ? info.safeArea.top : 24, menu ? menu.botto
 canvas.width = info.windowWidth * ratio;
 canvas.height = info.windowHeight * ratio;
 wx.showShareMenu({withShareTicket: true});
-wx.onShareAppMessage(function () { return {title:'开着磁吸车，吸走整栋楼！磁吸拆迁队',query:'mode=daily'}; });
+wx.onShareAppMessage(function () { return {title:'开着磁吸车，吸走整栋楼！磁吸拆迁队',query:require('./src/social').query(core.day())}; });
 start({
   canvas: canvas,
+  autoLogin:wx.getStorageSync('mgt-login-enabled')===true,
+  rememberLogin:function(enabled){try{wx.setStorageSync('mgt-login-enabled',enabled);}catch(e){}},
+  login:function(){return cloudClient.login();},
+  leaderboard:function(){return cloudClient.leaderboard();},
+  raceStart:function(){return cloudClient.raceStart();},
+  raceFinish:function(session,seconds){return cloudClient.raceFinish(session,seconds);},
+  onLaunchQuery:function(fn){wx.onShow(function(options){if(options&&options.query&&options.query.mode==='daily')fn(options.query);});},
   cloudStatus: function () { return cloudClient.status(); },
   cloudError: function () { return cloudClient.errorCode(); },
   cloudRetry: function () { return cloudClient.retry(); },
