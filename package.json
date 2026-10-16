@@ -1,6 +1,6 @@
 {
   "name": "magnet-crew",
-  "version": "14.0.0",
+  "version": "15.0.0",
   "private": true,
   "description": "Drive, magnetize, demolish and recycle — WeChat mini game",
   "scripts": {

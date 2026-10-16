@@ -1,6 +1,16 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),core=require('../src/salvage-core'),effects=require('../src/effects'),hint=require('../src/guidance');
 const tick=(g,seconds)=>{for(let i=0;i<Math.ceil(seconds/.02);i++)g.update(.02);};
+test('new contracts require safe detonations and retain a final target after unsafe blasts',()=>{
+ for(let id=8;id<=10;id++){
+  const g=new core.Game(123,1,{}, {lab:id});assert.equal(core.lab.ready(g),false);
+  g.blast.detonated=9;assert.equal(core.lab.ready(g),false);
+  g.buildings.forEach(b=>b.bolts.forEach(a=>g.damageAnchor(b,a,100)));
+  assert.ok(g.buildings.some(b=>b.state==='standing'));
+  g.blast.safeDetonated=g.lab.def.safe;assert.equal(core.lab.ready(g),true);
+ }
+ const g=new core.Game(1,1);g.plantBlast();g.armBlast();tick(g,3.1);assert.equal(g.blast.safeDetonated,0);
+});
 function inventory(g){return g.delivered+g.cargo.length+g.scrap.length+g.buildings.reduce((n,b)=>n+(b.state==='cleared'?0:b.mass)+b.bolts.filter(a=>!a.removed).length,0);}
 test('blast kits require proximity, one placement per tower and at most three armed sites',()=>{
  const g=new core.Game(1,1);g.car={x:22,y:620};assert.equal(g.plantBlast(),false);assert.equal(g.armBlast(),false);for(const b of g.buildings){g.car={x:b.bolts[0].x,y:b.bolts[0].y};assert.equal(g.plantBlast(),true);assert.equal(g.plantBlast(),false);}assert.equal(g.blast.charges.length,3);assert.equal(g.armBlast(),true);assert.equal(g.armBlast(),false);assert.equal(g.plantBlast(),false);g.done=true;assert.equal(g.armBlast(),false);

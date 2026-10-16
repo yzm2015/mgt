@@ -5,6 +5,7 @@
   function result(label,target,icon){return{label:label,target:target||null,icon:icon||'route'};}
   if(game.blast&&game.blast.timer>0){var exits=[{x:22,y:240},{x:368,y:240},{x:22,y:620},{x:368,y:620}].filter(function(p){return game.blast.charges.every(function(c){return Math.hypot(c.x-p.x,c.y-p.y)>125;});});return result('撤离警戒圈 / 点击前往安全位置',nearest(game,exits),'home');}
   if(game.lab){var l=game.lab;
+   if(l.def.blast&&(game.blast.detonated<l.def.blast||game.blast.safeDetonated<l.def.safe))return result('靠近建筑布设爆破，启动后撤离警戒圈',nearest(game,game.buildings.filter(function(b){return b.state==='standing';}).reduce(function(a,b){return a.concat(b.bolts.filter(function(v){return !v.removed;}));},[])),'bomb');
    if(l.links<l.def.links)return result(l.def.rule==='repel'?'开启两座同色磁极，再点击共振':'开启两座磁极，再点击共振按钮',null,'magnet');
    if(l.hits<l.def.hits){if(game.cargo.length<4){p=nearest(game,game.scrap);if(p)return result('先收集 4 件金属，组装废铁武器',p,'cargo');}else{
     var bolts=[];game.buildings.forEach(function(b){if(b.state==='standing'&&!(l.def.boss&&b.id===2&&game.demolished<2))b.bolts.forEach(function(a){if(!a.removed)bolts.push(a);});});p=nearest(game,bolts);return result('靠近核心，选择所需武器并点击释放',p,'pulse');

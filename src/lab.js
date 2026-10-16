@@ -8,7 +8,10 @@
  {name:'装甲钻探',tip:'钻头专攻单个核心；共振后再集中突破。',links:2,hits:2,weapon:'drill',armor:2},
  {name:'风暴护航',tip:'护盾持续 5 秒，抵消风暴减速并切割附近核心。',links:2,hits:1,weapon:'shield',storm:true},
  {name:'连锁实验',tip:'任意磁极组合共振 3 次，再用两次武器完成拆解。',links:3,hits:2,armor:2},
- {name:'铁穹守卫',tip:'先拆两座护卫塔，再拆中央首领；红圈蓄力时离开。',links:2,hits:3,armor:2,boss:true}
+ {name:'铁穹守卫',tip:'先拆两座护卫塔，再拆中央首领；红圈蓄力时离开。',links:2,hits:3,armor:2,boss:true},
+ {name:'仓区初爆',tip:'靠近布设，启动后撤离，完成一次安全爆破。',links:0,hits:0,blast:1,safe:1},
+ {name:'双区联拆',tip:'布设两个爆破点，撤离后同时起爆；也可分次完成。',links:0,hits:0,blast:2,safe:2,armor:1.5},
+ {name:'重装清场',tip:'完成三个安全爆破点计数，再清除装甲与回收废料。',links:0,hits:0,blast:3,safe:3,armor:2}
  ];
  var layouts=[
  [[196,483,86,62,3],[100,345,76,60,4],[276,290,82,65,5]],
@@ -17,16 +20,19 @@
  [[100,465,70,60,4],[280,430,70,60,5],[190,280,86,64,5]],
  [[265,475,76,60,4],[110,365,72,62,4],[282,275,72,62,5]],
  [[130,480,76,62,4],[275,370,76,62,5],[110,270,76,62,4]],
- [[102,450,66,60,3],[290,450,66,60,3],[195,285,96,76,7]]
+ [[102,450,66,60,3],[290,450,66,60,3],[195,285,96,76,7]],
+ [[120,485,76,60,3],[270,390,80,64,4],[125,275,74,58,4]],
+ [[195,475,86,60,4],[95,325,70,60,4],[280,305,74,60,5]],
+ [[110,460,72,64,5],[280,410,76,62,5],[190,265,88,60,6]]
  ];
  var weapons=[{id:'hammer',name:'磁锤',icon:'hammer'},{id:'drill',name:'钻头',icon:'drill'},{id:'shield',name:'护盾',icon:'shield'}];
  function init(g,id){var n=Math.max(1,Math.min(list.length,Math.floor(Number(id)||1))),def=list[n-1];g.lab={id:n,def:def,links:0,hits:0,cooldown:0,weapon:'hammer',weaponCooldown:0,shield:0,shot:null,attack:null,nextAttack:5};
- g.mission={kind:'lab',label:'共振 '+def.links+' 次 / 武器命中 '+def.hits+' 次',help:def.tip+' 点建筑或塔图标切换关闭→红＋→蓝−；右下角按本关目标切换技能。留4件金属可释放武器，工具里可换装、回收和调镜头。拆完三塔并达到回收配额即可过关。',value:0,target:1,nodes:[],passenger:null};
+ g.mission={kind:'lab',label:def.blast?'安全爆破 '+def.safe+' 处':'共振 '+def.links+' 次 / 武器命中 '+def.hits+' 次',help:def.tip+' 点建筑或塔图标切换关闭→红＋→蓝−；右下角按本关目标切换技能。留4件金属可释放武器，工具里可换装、回收和调镜头。拆完三塔并达到回收配额即可过关。',value:0,target:1,nodes:[],passenger:null};
  g.buildings.forEach(function(b){b.pole=0;b.accent='#65edff';b.bolts.forEach(function(a){a.hp=a.maxHp=(def.armor||1);});});
  if(def.boss){var b=g.buildings[2];b.floors=7;b.boss=true;b.bolts.forEach(function(a){a.hp=a.maxHp=4;});}
  g.dropScrap(g.car.x,g.car.y,6);g.total+=6;g.quota=Math.ceil(g.total*.7);
  }
- function ready(g){var l=g.lab;return l.links>=l.def.links&&l.hits>=l.def.hits;}
+ function ready(g){var l=g.lab;return l.links>=l.def.links&&l.hits>=l.def.hits&&(!l.def.blast||g.blast.detonated>=l.def.blast&&g.blast.safeDetonated>=l.def.safe);}
  function blocked(g,b){var l=g.lab;if(!l)return false;if(l.def.boss&&b.id===2&&g.buildings.some(function(o){return o!==b&&o.state==='standing';}))return true;return false;}
  function preserve(g,b){var l=g.lab;if(!l)return false;return l.links<l.def.links||(!ready(g)&&g.buildings.filter(function(o){return o.state==='standing';}).length===1);}
  function pole(g,id){var b=g.buildings[id];if(!g.lab||g.done||!b||b.state!=='standing')return false;b.pole=b.pole===0?1:b.pole===1?-1:0;return true;}

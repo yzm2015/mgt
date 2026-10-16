@@ -12,6 +12,9 @@ canvas.width = info.windowWidth * ratio;
 canvas.height = info.windowHeight * ratio;
 var displayCanvas=canvas,scene3D=require('./src/scene3d')(displayCanvas);
 if(scene3D){canvas=wx.createCanvas();canvas.width=displayCanvas.width;canvas.height=displayCanvas.height;}
+var inputHandler=null,viewportInsets={top:safeTop*ratio,bottom:(info.safeArea?Math.max(0,info.windowHeight-info.safeArea.bottom):12)*ratio};
+function resizeGame(){info=wx.getWindowInfo?wx.getWindowInfo():wx.getSystemInfoSync();ratio=Math.min(info.pixelRatio||1,2);menu=wx.getMenuButtonBoundingClientRect?wx.getMenuButtonBoundingClientRect():null;safeTop=Math.max(info.safeArea?info.safeArea.top:24,menu?menu.bottom+8:24);displayCanvas.width=info.windowWidth*ratio;displayCanvas.height=info.windowHeight*ratio;canvas.width=displayCanvas.width;canvas.height=displayCanvas.height;viewportInsets.top=safeTop*ratio;viewportInsets.bottom=(info.safeArea?Math.max(0,info.windowHeight-info.safeArea.bottom):12)*ratio;if(inputHandler)inputHandler('cancel',{x:0,y:0,id:null});}
+if(wx.onWindowResize)wx.onWindowResize(resizeGame);
 wx.showShareMenu({withShareTicket: true});
 wx.onShareAppMessage(function () { return {title:'开着磁吸车，吸走整栋楼！磁吸拆迁队',query:require('./src/social').query(core.day())}; });
 start({
@@ -34,7 +37,7 @@ start({
   cloudSave: function (data, revision) { return cloudClient.save(data, revision); },
   backupLocal: function (data) { try { wx.setStorageSync('mgt-before-cloud-restore',JSON.stringify(data)); } catch(e) { return false; } return true; },
   loadRestoreBackup: function () { try { return JSON.parse(wx.getStorageSync('mgt-before-cloud-restore')||'null'); } catch(e) { return null; } },
-  insets: {top:safeTop*ratio,bottom:(info.safeArea ? Math.max(0,info.windowHeight-info.safeArea.bottom) : 12)*ratio},
+  insets: viewportInsets,
   launch: wx.getLaunchOptionsSync().query || {},
   frame: function (fn) { requestAnimationFrame(fn); },
   feedback: function (type) { try { wx.vibrateShort({type:type === 'collapse' ? 'heavy' : 'light'}); } catch(e) {} },
@@ -44,7 +47,7 @@ start({
   event: function (name, data) { if(wx.reportEvent) wx.reportEvent(name,data); },
   visibility: function (fn) { wx.onHide(function () { fn(true); }); wx.onShow(function () { fn(false); }); },
   input: function (fn) {
-    function touch(type,e) { var t=(e.changedTouches || e.touches)[0];if(t)fn(type,{x:t.clientX*ratio,y:t.clientY*ratio}); }
+    inputHandler=fn;function touch(type,e){var touches=e.changedTouches||e.touches||[];if(type==='cancel'&&!touches.length){fn('cancel',{x:0,y:0,id:null});return;}touches.forEach(function(t){fn(type,{x:t.clientX*ratio,y:t.clientY*ratio,id:t.identifier===undefined?0:t.identifier});});}
     wx.onTouchStart(function(e){touch('down',e);});wx.onTouchMove(function(e){touch('move',e);});wx.onTouchEnd(function(e){touch('up',e);});wx.onTouchCancel(function(e){touch('cancel',e);});
   }
 },core);
