@@ -3,6 +3,12 @@
  function nearest(game,points){return points.slice().sort(function(a,b){return Math.hypot(a.x-game.car.x,a.y-game.car.y)-Math.hypot(b.x-game.car.x,b.y-game.car.y);})[0];}
  function hint(game){var m=game.mission,p;
   function result(label,target,icon){return{label:label,target:target||null,icon:icon||'route'};}
+  if(game.lab){var l=game.lab;
+   if(l.links<l.def.links)return result(l.def.rule==='repel'?'开启两座同色磁极，再点击共振':'开启两座磁极，再点击共振按钮',null,'magnet');
+   if(l.hits<l.def.hits){if(game.cargo.length<4){p=nearest(game,game.scrap);if(p)return result('先收集 4 件金属，组装废铁武器',p,'cargo');}else{
+    var bolts=[];game.buildings.forEach(function(b){if(b.state==='standing'&&!(l.def.boss&&b.id===2&&game.demolished<2))b.bolts.forEach(function(a){if(!a.removed)bolts.push(a);});});p=nearest(game,bolts);return result('靠近核心，选择所需武器并点击释放',p,'pulse');
+   }}
+  }
   if(m&&m.value<m.target){
    if(m.kind==='ground'&&game.cargo.length>=Math.min(6,m.target-game.groundDelivered))return result('送回绿色中枢，完成地面交付',{x:67,y:584},'cargo');
    if(m.kind==='airlift'&&game.cargo.length>0&&game.dispatchCooldown<=0)return result('点击无人机，货物计入空运配额',null,'drone');

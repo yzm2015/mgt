@@ -31,3 +31,9 @@ test('dense collapse particles, drone flight and guidance stay below the geometr
 test('camera reset takes the shortest turn after several complete orbits',()=>{
  const {canvas}=fakeGL(),renderer=create(canvas);renderer.prepare(0,true);renderer.rotate(Math.PI*6);renderer.prepare(1,true);const before=renderer.project(70,530);renderer.reset();renderer.prepare(1.05,false);const after=renderer.project(70,530);assert.ok(Math.hypot(after.x-before.x,after.y-before.y)<.001,'reset must not spin through previous complete revolutions');
 });
+
+test('compact experiment camera keeps picking accurate and renders boss, polarity and all weapons with bounded geometry',()=>{
+ const {canvas,calls}=fakeGL(),renderer=create(canvas),g=new core.Game(1,1,{}, {lab:7});renderer.layout(true);g.setPole(0);g.setPole(1);g.setPole(1);g.resonate();g.lab.attack={x:70,y:530,left:1};g.cargo=Array.from({length:4},()=>({x:70,y:530,rot:0}));
+ for(const weapon of ['hammer','drill','shield']){g.equipWeapon(weapon);g.lab.shield=2;g.lab.shot={kind:weapon,x:70,y:530,life:.3,target:{x:100,y:450}};renderer.prepare(1,true);renderer.render(g,{x:0,y:0,s:2},{width:780,height:1440},1);const vertices=calls.filter(c=>c[0]==='bufferData'&&c[2].length>24).at(-1)[2];assert.ok(vertices.length/9<50000);assert.ok([...vertices].every(Number.isFinite));const p=renderer.project(70,530),hit=renderer.groundPoint(p);assert.ok(Math.hypot(hit.x-70,hit.y-530)<.001);}
+ renderer.layout(false);renderer.prepare(2,true);const p=renderer.project(70,530),hit=renderer.groundPoint(p);assert.ok(Math.hypot(hit.x-70,hit.y-530)<.001);
+});
