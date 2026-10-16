@@ -6,7 +6,7 @@
     var scene3D=platform.scene3D,missions=core.missions,controlsPage=0;
     var createFx=typeof module!=='undefined'?require('./effects'):root.createMagnetEffects,getHint=typeof module!=='undefined'?require('./guidance'):root.getMagnetHint,fx=createFx(!!platform.reducedEffects),focus=null,resultAge=0,press=null,touchStart=null,dragMoved=false;
     var growth=core.growth,garageTab='gear',gearIndex=0,briefingStage=null,earned=null,saveFailed=false;
-    var ink='#e5f4ff',cream='#060e1b',muted='#7393ad',orange='#65edff',green='#96ffd4',blue='#a48aff';
+    var ink='#f0eadb',cream='#202722',muted='#adb5a4',orange='#e0b660',green='#bac99d',blue='#a6b19b';
     var createArt=typeof module!=='undefined'?require('./neo-art'):root.createMagnetArt,art=createArt(ctx),visualTime=0;
     function persist(){var result=platform.save(save);saveFailed=result===false;return result;}
     function event(n,d){platform.event(n,d||{});}
@@ -28,7 +28,7 @@
       if(!inDrawer){game.buildings.forEach(function(b){if(b.state!=='standing')return;var p=scene3D?scene3D.project(b.x,b.y,b.floors*18+34):{x:b.x,y:b.y-40},c=b.pole===1?'#ff829a':b.pole===-1?'#65caff':ink;text((b.boss?'BOSS':String(b.id+1))+(b.pole===1?' ＋':b.pole===-1?' −':''),p.x,p.y,12,c,'center');});
       if(!scene3D){game.buildings.forEach(function(b){if(b.tension&&b.tension.life>0)line(b.x,b.y,b.tension.x,b.tension.y,b.tension.kind==='attract'?'#ff829a':'#65caff',3);});if(l.attack)art.ring(l.attack.x,l.attack.y,48,'#ff637f',3);if(l.shield>0)art.ring(game.car.x,game.car.y,110,green,3);if(l.shot&&l.shot.life>0)art.ring(l.shot.x,l.shot.y,10+(1-l.shot.life/.65)*135,blue,3);}
       }var active=game.buildings.filter(function(b){return b.state==='standing'&&b.pole;}),canLink=active.some(function(a,i){return active.some(function(b,j){return j>i&&(!l.def.rule||(a.pole===b.pole?'repel':'attract')===l.def.rule);});});
-      art.panel(24,441,342,139,'#0b1d31');
+      art.panel(24,441,342,139,'#2b342d');
       game.buildings.forEach(function(b,i){var live=b.state==='standing',c=b.pole===1?'#ff829a':b.pole===-1?'#65caff':muted,type=!live?'tower-cleared':b.pole===1?'tower-plus':b.pole===-1?'tower-minus':'tower-off';
         iconButton(type,65+i*86,474,{radius:23,hitWidth:74,hitHeight:68,labelOffset:33,label:!live?'已拆':b.pole===1?'正极':b.pole===-1?'负极':'关闭',badge:b.boss?'B':i+1,color:c,selected:live&&b.pole!==0,enabled:live,action:function(){if(!game.setPole(i))notice('建筑已经拆除');else notice((b.boss?'首领':String(i+1)+'号塔')+' / '+(b.pole===1?'红色正极 ＋':b.pole===-1?'蓝色负极 −':'磁极已关闭'));}});
       });
@@ -50,20 +50,20 @@
     function circle(x,y,r,color){ctx.fillStyle=color;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();}
     function button(label,x,y,w,fn,secondary){
       var type=/登录|通行证/.test(label)?'user':/分享|邀请/.test(label)?'share':/返回基地/.test(label)?'home':/返回/.test(label)?'back':/满级/.test(label)?'check':/升级/.test(label)?'upgrade':/再次|再挑战|连接/.test(label)?'retry':'play';
-      art.panel(x,y,w,46,secondary?'#102338':'#60e6f6');art.icon(type,x+25,y+23,28,secondary?orange:'#0b3447');text(label,x+(w+18)/2,y+29,12,secondary?ink:'#051322','center');buttons.push({x:x,y:y,w:w,h:46,fn:fn});
+      art.panel(x,y,w,46,secondary?'#343e33':'#d9b05b');art.icon(type,x+25,y+23,28,secondary?orange:'#333b2d');text(label,x+(w+18)/2,y+29,12,secondary?ink:'#272d23','center');buttons.push({x:x,y:y,w:w,h:46,fn:fn});
     }
     function iconButton(type,x,y,options){
-      var o=options||{},small=o.small,r=o.radius||(small?17:27),color=o.enabled===false?'#526a80':o.color||orange;
-      art.glow(function(){circle(x,y,r+3,'#10283b');},o.ready?color:'#18394b',o.ready?14:5);art.ring(x,y,r+3,'#264159',1);art.ring(x,y,r,color,1);
+      var o=options||{},small=o.small,r=o.radius||(small?17:27),color=o.enabled===false?'#777e71':o.color||orange;
+      art.glow(function(){circle(x,y,r+3,'#303a31');},o.ready?color:'#424f40',o.ready?5:1);art.ring(x,y,r+3,'#626d56',1);art.ring(x,y,r,color,1);
       if(o.progress!==undefined)art.ring(x,y,r+3,color,2.5,-Math.PI/2,-Math.PI/2+Math.PI*2*Math.max(.001,Math.min(1,o.progress)));
-      if(o.ready)art.glow(function(){art.ring(x,y,r+3,color,1);},color,12);
+      if(o.ready)art.glow(function(){art.ring(x,y,r+3,color,1);},color,4);
       if(o.selected){art.ring(x,y,r+1,color,2);circle(x-19,y+18,6,'#11362e');art.icon('check',x-19,y+18,9,green);}
       art.icon(type,x,y,small?18:25,color);
-      if(o.badge!==undefined&&o.badge!==''){circle(x+22,y-19,11,'#132d43');text(String(o.badge),x+22,y-15,10,ink,'center');}
+      if(o.badge!==undefined&&o.badge!==''){var bx=x+(small?13:22),by=y-(small?13:19);circle(bx,by,small?8:11,'#343e30');text(String(o.badge),bx,by+3,small?8:10,ink,'center');}
       if(o.label)text(o.label,x,y+(o.labelOffset||39),o.labelOffset?9:10,o.enabled===false?muted:ink,'center');
       var w=o.hitWidth||(small?44:92),h=o.hitHeight||(small?44:78);buttons.push({x:x-w/2,y:y-(o.hitHeight?h/2:small?22:34),w:w,h:h,fn:o.action});
     }
-    function navTile(type,label,x,y,w,fn){art.panel(x,y,w,46,'#0d2034');if(w<=194){art.icon(type,x+w/2,y+15,26,orange);text(label,x+w/2,y+40,10,ink,'center');}else{circle(x+27,y+23,17,'#173548');art.icon(type,x+27,y+23,27,orange);text(label,x+53,y+28,12,ink);art.icon('next',x+w-12,y+23,10,muted);}buttons.push({x:x,y:y,w:w,h:46,fn:fn});}
+    function navTile(type,label,x,y,w,fn){art.panel(x,y,w,46,'#303b31');if(w<=194){art.icon(type,x+w/2,y+15,26,orange);text(label,x+w/2,y+40,10,ink,'center');}else{circle(x+27,y+23,17,'#173548');art.icon(type,x+27,y+23,27,orange);text(label,x+53,y+28,12,ink);art.icon('next',x+w-12,y+23,10,muted);}buttons.push({x:x,y:y,w:w,h:46,fn:fn});}
 
     function chip(label,x,y,w){box(x,y,w,26,'#10243a',4);line(x,y+25,x+w,y+25,'#23506a',1);text(label,x+w/2,y+18,11,'#a7d3e9','center');}
     function bolt(x,y,scale){art.scrap(x,y,scale);}
@@ -110,7 +110,7 @@
     function towerAt(p){if(!scene3D||!game.lab)return null;var found=[];game.buildings.forEach(function(b){if(b.state!=='standing')return;var points=[];[-1,1].forEach(function(x){[-1,1].forEach(function(y){[0,b.floors*18+47].forEach(function(h){points.push(scene3D.project(b.x+x*b.w/2,b.y+y*b.h/2,h));});});});var xs=points.map(function(a){return a.x;}),ys=points.map(function(a){return a.y;});if(p.x>=Math.min.apply(null,xs)-4&&p.x<=Math.max.apply(null,xs)+4&&p.y>=Math.min.apply(null,ys)-4&&p.y<=Math.max.apply(null,ys)+4){var mid=scene3D.project(b.x,b.y,b.floors*9);found.push({b:b,d:Math.hypot(mid.x-p.x,mid.y-p.y)});}});found.sort(function(a,b){return a.d-b.d;});return found.length?found[0].b:null;}
     function mainSkill(){var l=game.lab;if(l&&l.links<l.def.links){if(!game.resonate())notice(l.cooldown>0?'共振冷却中':l.def.rule==='repel'?'点两座建筑，设为同色磁极':'点两座建筑，分别设红＋和蓝−');}else if(l&&l.hits<l.def.hits){if(!game.fireWeapon())notice(game.cargo.length<4?'先吸取 4 件金属':l.weaponCooldown>0?'武器冷却中':'靠近核心，再释放武器');}else if(!game.activate())notice('脉冲充能中 / 回收可加速');}
     function toolsPanel(){
-      buttons=[];box(0,0,390,720,'rgba(2,8,18,.48)');art.panel(16,383,358,323,'#091c2d');text('工具 / 已暂停',34,411,15,ink);text('完成配置后收起，继续驾驶',34,431,10,muted);
+      buttons=[];box(0,0,390,720,'rgba(2,8,18,.48)');art.panel(16,383,358,323,'#29332c');text('工具 / 已暂停',34,411,15,ink);text('完成配置后收起，继续驾驶',34,431,10,muted);
       if(game.lab)labControls(true);else{text('运输无人机可远程交付车尾货物',195,490,12,green,'center');text('镜头操作只在这里显示，工地保持清爽',195,525,11,muted,'center');}
       iconButton('drone',65,622,{radius:22,hitWidth:74,hitHeight:64,labelOffset:32,label:'回收',color:green,badge:game.dispatchCooldown>0?Math.ceil(game.dispatchCooldown):'',action:function(){if(game.dispatch()){scene='play';notice('无人机已接管货物');}else notice(game.cargo.length?'无人机冷却中或任务需保留货物':'先收集金属');}});
       if(scene3D){[['retry',151,function(){scene3D.reset();}],['back',237,function(){scene3D.rotate(-Math.PI/4);}],['next',323,function(){scene3D.rotate(Math.PI/4);}]].forEach(function(c){iconButton(c[0],c[1],622,{radius:22,hitWidth:74,hitHeight:64,labelOffset:32,label:c[0]==='retry'?'复位':c[0]==='back'?'左转':'右转',action:c[2]});});}
@@ -122,13 +122,15 @@
       {icon:'back',name:'镜头左转',desc:'向左旋转四十五度',action:function(){scene3D.rotate(-Math.PI/4);}},
       {icon:'next',name:'镜头右转',desc:'向右旋转四十五度',action:function(){scene3D.rotate(Math.PI/4);}},
       {icon:'garage',name:'更多工具',desc:'换装、调镜头与备用操作',action:function(){scene='tools';drag=false;game.stop();}},
-      {icon:'help',name:'图标说明',desc:'查看全部按钮与状态含义',action:function(){controlsPage=0;scene='controls-help';drag=false;game.stop();}}
+      {icon:'help',name:'图标说明',desc:'查看全部按钮与状态含义',action:function(){controlsPage=0;scene='controls-help';drag=false;game.stop();}},
+      {icon:'bomb',name:'布设爆破',desc:'靠近目标布设；最多三处',action:function(){if(game.plantBlast())notice('已布设 / 方位影响倾倒方向，可撤离引爆');else notice(game.blast.timer>0?'倒计时中，先撤离':game.blast.cooldown>0?'爆破工具补给中':game.blast.charges.length>=3?'已布设三处，可远程引爆':'靠近未受保护的建筑再布设');}},
+      {icon:'detonate',name:'远程引爆',desc:'三秒倒计时；先离开警戒圈',action:function(){if(game.armBlast())notice('倒计时启动 / 驶离警戒圈');else notice(game.blast.timer>0?'爆破倒计时进行中':'先布设，再引爆');}}
     ];}
     function controlsHelp(){
       subHeader('help','按钮图标说明','CONTROLS / 查看期间已暂停');
       var l=game.lab,primary=l&&l.links<l.def.links?'resonate':l&&l.hits<l.def.hits?l.weapon:'pulse',items=[{icon:'drone',name:'无人机回收',desc:'交付车尾货物；冷却后再用'},{icon:'dash',name:'推进',desc:'向行驶方向短距加速'},{icon:primary,name:'主技能',desc:'随目标切换共振、武器或脉冲'}].concat(quickActions());
       if(controlsPage)items=[{icon:'hammer',name:'磁锤',desc:'范围重击；持有四件金属'},{icon:'drill',name:'钻头',desc:'单点穿甲；持有四件金属'},{icon:'shield',name:'护盾',desc:'护航五秒，抵消风暴干扰'},{icon:'resonate',name:'磁极共振',desc:'异极多点牵引，同极单点弹射'},{icon:'pulse',name:'电磁脉冲',desc:'范围破核；回收可加快充能'},{icon:'tower-plus',name:'正极 ＋',desc:'红色正极，点建筑可切换'},{icon:'tower-minus',name:'负极 −',desc:'蓝色负极，点建筑可切换'},{icon:'tower-off',name:'磁极关闭',desc:'不参与共振；点建筑可开启'},{icon:'check',name:'选中状态',desc:'打勾代表当前装配或已开启'}];
-      items.forEach(function(item,i){var x=24+i%2*176,y=142+Math.floor(i/2)*82;art.panel(x,y,166,74,'#0c2235');art.icon(item.icon,x+23,y+23,25,i<3?green:orange);text(item.name,x+44,y+27,12,ink);for(var j=0;j<item.desc.length;j+=14)text(item.desc.slice(j,j+14),x+12,y+50+j/14*14,10,muted);});
+      items.forEach(function(item,i){var x=24+i%2*176,y=items.length>10?132+Math.floor(i/2)*72:142+Math.floor(i/2)*82;art.panel(x,y,166,items.length>10?66:74,'#313c32');art.icon(item.icon,x+23,y+23,25,i<3?green:orange);text(item.name,x+44,y+27,12,ink);for(var j=0;j<item.desc.length;j+=14)text(item.desc.slice(j,j+14),x+12,y+50+j/14*14,10,muted);});
       text('底部：主操作  /  右侧：快速操作',195,582,11,green,'center');text('外环＝冷却或充能；数字秒数／百分比充能',195,605,10,muted,'center');text('实验室点建筑切 ＋／−；灰色暂不可用',195,624,10,muted,'center');button('返回游戏',25,650,200,function(){scene='play';},true);button(controlsPage?'主界面图标':'进阶图标',237,650,128,function(){controlsPage=controlsPage?0:1;},true);
     }
     function play(){
@@ -141,16 +143,17 @@
       iconButton('pause',346,30,{small:true,color:muted,action:function(){scene='leave';drag=false;game.stop();}});
       if(game.mission&&game.mission.kind!=='lab')game.mission.nodes.forEach(function(n){if(!n.active){var p=scene3D.project(n.x,n.y,30);box(p.x-11,p.y-15,22,20,'rgba(21,35,42,.84)',3);text(String(n.id+1),p.x,p.y,13,green,'center');}});
       if(game.lab){game.buildings.forEach(function(b){if(b.state!=='standing')return;var p=scene3D.project(b.x,b.y,b.floors*18+32),c=b.pole===1?'#ff829a':b.pole===-1?'#65caff':ink;box(p.x-22,p.y-15,44,20,'rgba(21,35,42,.84)',3);text((b.boss?'BOSS':String(b.id+1))+(b.pole===1?' ＋':b.pole===-1?' −':''),p.x,p.y,13,c,'center');});}
-      if(game.lab&&game.lab.def.boss){var boss=game.buildings[2],hp=boss.bolts.reduce(function(n,a){return n+Math.max(0,a.hp);},0)/12;box(60,90,270,3,'#2d2335');box(60,90,270*hp,3,'#ff637f');if(game.lab.attack)text('离开红圈',195,115,12,'#ff829a','center');}
+      if(game.lab&&game.lab.def.boss){var boss=game.buildings[2],hp=boss.bolts.reduce(function(n,a){return n+Math.max(0,a.hp);},0)/12;box(60,90,270,3,'#2d2335');box(60,90,270*hp,3,'#ff637f');if(game.lab.attack&&game.blast.timer<=0)text('离开红圈',195,115,12,'#ff829a','center');}
       fx.texts().slice(fx.reduced()?-1:-2).forEach(function(t){var p=scene3D.project(t.x,t.z,35+(1-t.life/t.max)*24);ctx.globalAlpha=Math.min(1,t.life*3);text(t.text,Math.max(65,Math.min(325,p.x)),p.y,12,t.color,'center');ctx.globalAlpha=1;});
+      if(game.blast.timer>0){art.panel(52,91,274,29,'#57482b');text('爆破 '+Math.ceil(game.blast.timer)+' 秒 / '+(game.blast.warning?'驶离警戒圈':'已撤离，等待爆破'),189,111,11,orange,'center');}
       if(game.combo>1&&game.time<game.comboUntil)text('×'+game.combo,24,111,22,orange);
       var l=game.lab,step=l&&l.links<l.def.links?'resonate':l&&l.hits<l.def.hits?'weapon':'pulse',type=step==='resonate'?'resonate':step==='weapon'?l.weapon:'pulse',cooldown=step==='resonate'?l.cooldown:step==='weapon'?l.weaponCooldown:0,ready=step==='pulse'?game.energy>=1:cooldown<=0&&(step!=='weapon'||game.cargo.length>=4),label=step==='resonate'?'共振':step==='weapon'?'释放':'脉冲';
       text(game.cargo.length+'/'+game.capacity(),77,632,11,ink,'center');
       iconButton('drone',77,674,{radius:26,hitWidth:80,hitHeight:76,label:'回收',color:green,badge:game.dispatchCooldown>0?Math.ceil(game.dispatchCooldown):'',progress:1-game.dispatchCooldown/game.droneDelay(),enabled:game.cargo.length>0&&game.dispatchCooldown<=0,action:function(){if(game.dispatch())notice('无人机已接管货物');else notice(game.cargo.length?'冷却中，或任务需保留货物':'先收集金属再回收');}});
       iconButton('dash',195,674,{radius:23,hitWidth:64,hitHeight:70,label:'推进',color:blue,progress:1-game.dashCooldown/game.dashDelay(),enabled:game.dashCooldown<=0,action:function(){game.dash();}});
       iconButton(type,313,674,{radius:32,hitWidth:90,hitHeight:80,label:label,color:orange,badge:cooldown>0?Math.ceil(cooldown):step==='pulse'&&game.energy<1?Math.round(game.energy*100)+'%':'',progress:step==='pulse'?game.energy:1-cooldown/(step==='resonate'?3:l.weapon==='shield'?7:3),enabled:ready,ready:ready,action:mainSkill});
-      art.panel(338,164,44,314,'#0b1d2c');quickActions().forEach(function(q,i){iconButton(q.icon,360,190+i*52,{small:true,color:i===5?green:muted,action:q.action});});
-      var guide=step==='resonate'?'点建筑切磁极，再按右下角共振':step==='weapon'?'吸取金属，靠近核心释放武器':focus?focus.label:'';art.panel(78,593,234,29,'#132536');text(guide,195,612,9,ink,'center');if(focus&&focus.target)buttons.push({x:90,y:593,w:210,h:39,fn:function(){game.navigate(focus.target.x,focus.target.y);}});
+      art.panel(338,164,44,418,'#29332b');quickActions().forEach(function(q,i){iconButton(q.icon,360,190+i*52,{small:true,color:i>=6?orange:i===5?green:muted,badge:i===6?(game.blast.cooldown>0?Math.ceil(game.blast.cooldown):game.blast.charges.length||''):i===7&&game.blast.timer>0?Math.ceil(game.blast.timer):'',action:q.action});});
+      var guide=game.blast.timer>0?focus.label:step==='resonate'?'点建筑切磁极，再按右下角共振':step==='weapon'?'吸取金属，靠近核心释放武器':focus?focus.label:'';art.panel(78,593,234,29,'#35412f');text(guide,195,612,9,ink,'center');if(focus&&focus.target)buttons.push({x:90,y:593,w:210,h:39,fn:function(){game.navigate(focus.target.x,focus.target.y);}});
     }
     function playLegacy(){
       focus=getHint(game);if(scene3D&&scene3D.layout)scene3D.layout(!!game.lab);if(scene3D&&scene3D.prepare)scene3D.prepare(visualTime,fx.reduced());
@@ -180,13 +183,13 @@
         if(game.activeBolt){var p=scene3D.project(game.activeBolt.x,game.activeBolt.y,25);text('核心锁定',p.x,p.y,10,orange,'center');}
         fx.texts().slice(fx.reduced()?-1:-4).forEach(function(t,i){var p=scene3D.project(t.x,t.z,30+(1-t.life/t.max)*30);ctx.globalAlpha=Math.min(1,t.life*3);text(t.text,Math.max(80,Math.min(310,p.x)),p.y-i*9,12,t.color,'center');ctx.globalAlpha=1;});
         if(game.combo>1&&game.time<game.comboUntil){art.panel(25,224,126,38,'#173d4b');text('CHAIN ×'+game.combo,38,249,18,orange);box(38,255,96*Math.min(1,(game.comboUntil-game.time)/(game.moduleId==='arc'?6:4)),2,orange);}
-        if(focus){art.panel(34,587,322,39,'#102e3f');art.icon(focus.icon,52,606,18,green);text(focus.label,69,609,10,ink);if(focus.target){art.icon('next',341,606,13,green);buttons.push({x:34,y:587,w:322,h:39,fn:function(){if(game.navigate(focus.target.x,focus.target.y))notice('自动绕开建筑，点击别处或拖动可改道');}});}}
+        if(focus){art.panel(34,587,322,39,'#354334');art.icon(focus.icon,52,606,18,green);text(focus.label,69,609,10,ink);if(focus.target){art.icon('next',341,606,13,green);buttons.push({x:34,y:587,w:322,h:39,fn:function(){if(game.navigate(focus.target.x,focus.target.y))notice('自动绕开建筑，点击别处或拖动可改道');}});}}
 
       }
       if(game.lab)labControls();
       if(game.lab&&game.lab.def.boss){var boss=game.buildings[2],hp=boss.bolts.reduce(function(n,a){return n+Math.max(0,a.hp);},0)/12;art.panel(25,176,340,25,'#2b2035');text(game.demolished<2?'铁穹守卫 / 先拆两座护卫塔':game.lab.attack?'红圈蓄力 / 驶离或开启护盾':'首领屏障解除 / 集中击破核心',38,192,10,'#ff829a');box(38,197,310*hp,2,'#ff637f');}
       text('牵引载重 '+game.cargo.length+' / '+game.capacity(),25,645,10,muted);text('脉冲能量 '+Math.round(game.energy*100)+'%',365,645,10,orange,'right');
-      art.panel(24,649,342,57,'#0b1d31');
+      art.panel(24,649,342,57,'#2b342d');
       iconButton('drone',77,674,{color:green,label:'无人机',badge:game.dispatchCooldown>0?Math.ceil(game.dispatchCooldown):'',progress:1-game.dispatchCooldown/game.droneDelay(),enabled:game.dispatchCooldown<=0&&game.cargo.length>0,action:function(){if(game.dispatch()){notice('运输无人机已接管货物');event('drone',{mode:mode});}else notice(game.mission&&game.mission.kind==='ground'&&game.cargo.length&&game.dispatchCooldown<=0?'本关需保留地面货物，请驶回回收中枢':game.cargo.length?'无人机正在返航，请稍候':'先吸取金属，再呼叫无人机');}});
       iconButton('dash',195,674,{color:blue,label:'推进',badge:game.dashCooldown>0?Math.ceil(game.dashCooldown):'',progress:1-game.dashCooldown/game.dashDelay(),enabled:game.dashCooldown<=0,action:function(){if(game.dash())event('dash',{mode:mode});else notice('推进器冷却中');}});
       iconButton('pulse',313,674,{color:game.boost>0?blue:orange,label:game.boost>0?'超频':'脉冲',badge:game.boost>0?Math.ceil(game.boost):game.energy>=1?'':Math.round(game.energy*100)+'%',progress:game.boost>0?game.boost/(game.moduleId==='drive'?8:5):game.energy,enabled:game.energy>=1||game.boost>0,ready:game.energy>=1,action:function(){if(game.activate()){notice('脉冲释放！同时击穿范围内的核心');event('boost',{mode:mode});if(platform.feedback)platform.feedback('collapse');}else notice(game.boost>0?'超频中，继续靠近核心拆解':'回收金属可加速脉冲充能');}});
@@ -200,7 +203,7 @@
     }
     function guide(){
       subHeader('help','驾驶手册','PILOT GUIDE / 四步开拆');
-      [['magnet','点击导航，拖动驾驶','点地面自动前往；拖动手动操作。'],['pulse','选好站位，一键引爆','青蓝脉冲圈内的核心会同时被击穿。'],['drone','满载交给运输无人机','远程卸货可充能；回收站也能卸货。'],['dash','推进突袭，连击构筑','先朝目标转向，再推进；首塔掉落模组。']].forEach(function(item,i){var y=143+i*106;art.panel(24,y,342,91,'#0b2034');art.icon(item[0],57,y+42,29,i%2?blue:orange);text(item[1],84,y+36,15,ink);text(item[2],84,y+61,10,muted);});
+      [['magnet','点击导航，拖动驾驶','点地面自动前往；拖动手动操作。'],['pulse','选好站位，一键引爆','青蓝脉冲圈内的核心会同时被击穿。'],['drone','满载交给运输无人机','远程卸货可充能；回收站也能卸货。'],['dash','推进突袭，连击构筑','先朝目标转向，再推进；首塔掉落模组。']].forEach(function(item,i){var y=143+i*106;art.panel(24,y,342,91,'#2b372e');art.icon(item[0],57,y+42,29,i%2?blue:orange);text(item[1],84,y+36,15,ink);text(item[2],84,y+61,10,muted);});
       text('轻点地面自动绕障碍，拖动手动驾驶，松手停止',195,598,10,muted,'center');button('返回基地',25,630,340,function(){scene='home';},true);
     }
     function records(){
@@ -231,10 +234,10 @@
     }
     function cloudPanel(){
       subHeader('cloud','云端存档','CLOUD VAULT / 手动备份与恢复');var status=platform.cloudStatus?platform.cloudStatus():'offline';
-      art.panel(24,142,342,99,'#0b2034');art.icon('cloud',57,183,34,status==='ready'?green:orange);
+      art.panel(24,142,342,99,'#2b372e');art.icon('cloud',57,183,34,status==='ready'?green:orange);
       text(({ready:'云端已连接',pending:'正在连接',unavailable:'连接尚未完成',offline:'浏览器离线试玩'})[status]||'离线模式',86,181,18,ink);
       text('本机进度始终保留 · 备份含装备与成长记录',86,209,10,muted);
-      art.panel(24,258,342,174,'#0b2034');text('本机',40,287,12,orange);text('云端',218,287,12,green);
+      art.panel(24,258,342,174,'#2b372e');text('本机',40,287,12,orange);text('云端',218,287,12,green);
       text('第 '+save.level+' 区',40,323,23,ink);text(save.coins+' 回收币',40,350,12,muted);text('完成 '+save.records.completed+' 场',40,376,11,muted);
       if(remoteSave&&remoteSave.save){var data=core.cleanSave(remoteSave.save);text('第 '+data.level+' 区',218,323,23,ink);text(data.coins+' 回收币',218,350,12,muted);text('版本 '+remoteSave.revision,218,376,11,green);text('备份于 '+new Date(remoteSave.updatedAt+8*3600000).toISOString().slice(0,16).replace('T',' ')+' 北京时间',40,413,9,muted);}
       else text(remoteLoading?'读取中…':remoteSave?'暂无备份':'未读取',218,329,16,muted);
@@ -247,7 +250,7 @@
       }else if(platform.cloudRetry)button(status==='pending'?'连接中':'重新连接',25,516,340,function(){if(status!=='pending')platform.cloudRetry();},true);
       text('备份不是公共排名或支付凭证',195,607,10,muted,'center');button('返回基地',25,630,340,function(){scene='home';},true);
       if(scene==='cloud-confirm'){
-        buttons=[];box(0,0,390,720,'rgba(2,8,18,.96)');art.panel(24,225,342,287,'#0b2034');
+        buttons=[];box(0,0,390,720,'rgba(2,8,18,.96)');art.panel(24,225,342,287,'#2b372e');
         art.icon(cloudConfirm==='backup'?'upload':'download',195,269,36,orange);text(cloudConfirm==='backup'?'确认备份本机？':cloudConfirm==='undo'?'撤销这次恢复？':'确认恢复云端？',195,315,23,ink,'center');
         text(cloudConfirm==='backup'?'将以本机进度更新云端备份，保留本机数据':cloudConfirm==='undo'?'将切回恢复前保留的本机副本':'将替换本机进度；恢复前会保留一份回退副本',195,349,10,muted,'center');
         button(cloudBusy?'正在备份…':'确认',44,385,302,finishCloudAction,cloudBusy);button('取消',44,445,302,function(){if(!cloudBusy){cloudConfirm='';scene='cloud';}},true);
@@ -257,17 +260,17 @@
       buttons=[];box(0,0,390,720,'rgba(2,8,18,.94)');
       text('FIELD UPGRADE / 战术补给',24,145,10,orange);text('选择你的拆解流派',24,186,28,ink);text('第一座塔已拆除 · 免费装载一枚模组',24,215,12,muted);
       [['arc','01 / ARC','电弧共振','脉冲范围 +30 · 冲击扩散更远','连击窗口延长至 6 秒',orange],['swarm','02 / SWARM','回收蜂群','载重 +8 · 无人机冷却减半','少跑运输，专心拆塔',green],['drive','03 / DRIVE','矢量超驱','移速、磁吸范围和充能提升','超频持续时间延长至 8 秒',blue]].forEach(function(m,i){
-        var y=246+i*107;art.panel(24,y,342,94,'#0b2034');text(m[1],40,y+20,9,m[5]);text(m[2],40,y+46,21,ink);text(m[3],40,y+67,11,muted);text(m[4],40,y+83,10,m[5]);
+        var y=246+i*107;art.panel(24,y,342,94,'#2b372e');text(m[1],40,y+20,9,m[5]);text(m[2],40,y+46,21,ink);text(m[3],40,y+67,11,muted);text(m[4],40,y+83,10,m[5]);
         art.ring(326,y+43,15,m[5],1);text('+',326,y+49,21,m[5],'center');
         buttons.push({x:24,y:y,w:342,h:94,fn:function(){if(game.chooseModule(m[0])){scene='play';drag=false;notice(m[2]+' 已装载 · 脉冲能量充满');event('module_selected',{type:m[0]});}}});
       });
       text('仅本局生效 · 选择期间计时暂停',195,607,11,muted,'center');
     }
     function result(){
-      box(0,0,390,720,'rgba(2,8,18,.94)');art.panel(24,139,342,483,'#0a1d2d');text(mode==='lab'?'磁极实验完成':game.risk?'危险合约完成':'区域拆解完成',195,187,31,ink,'center');text('MISSION COMPLETE / 磁场已净空',195,214,12,muted,'center');truck(195,268,0);text(Math.ceil(game.time)+' 秒 / '+game.delivered+' 件回收 / ×'+game.maxCombo,195,326,14,ink,'center');
+      box(0,0,390,720,'rgba(2,8,18,.94)');art.panel(24,139,342,483,'#2b372d');text(mode==='lab'?'磁极实验完成':game.risk?'危险合约完成':'区域拆解完成',195,187,31,ink,'center');text('MISSION COMPLETE / 磁场已净空',195,214,12,muted,'center');truck(195,268,0);text(Math.ceil(game.time)+' 秒 / '+game.delivered+' 件回收 / ×'+game.maxCombo,195,326,14,ink,'center');
       buttons.push({x:44,y:346,w:302,h:70,fn:function(){resultAge=2;}});
       var reveal=fx.reduced()?1:1-Math.pow(1-Math.min(1,resultAge/.85),3);if(!fx.reduced()&&resultAge<1.4)for(var ci=0;ci<20;ci++){var ca=ci*2.399;ctx.globalAlpha=Math.max(0,1-resultAge/1.4);circle(195+Math.cos(ca)*(30+resultAge*100),180+Math.sin(ca)*(15+resultAge*55)+resultAge*15,2,ci%2?orange:blue);ctx.globalAlpha=1;}
-      if(mode==='lab'){art.panel(44,346,302,70,'#102d40');text('实验补助 / 回收币',195,369,11,muted,'center');text('+'+Math.round(40*reveal),195,400,27,green,'center');text('共振 '+game.lab.links+' 次 / 武器命中 '+game.lab.hits+' 次',195,432,11,orange,'center');}else if(earned){[['回收币','+'+Math.round(earned.coins*reveal),orange],['经验','+'+Math.round(earned.xp*reveal),blue],['科技零件','+'+Math.round(earned.parts*reveal),green]].forEach(function(r,i){var x=44+i*104;art.panel(x,346,94,68,'#102d40');text(r[0],x+47,369,10,muted,'center');text(r[1],x+47,399,23,r[2],'center');});text(mode==='lab'?'实验补助已到账 / 不计入每日竞速榜':earned.levels?'工程师升级至 LV.'+earned.level+(earned.level===2||earned.level===4?' / 新底盘已解锁':' / 升级零件已到账'):earned.first?'首通奖励已到账，机库可立即强化':earned.newStars?'星章突破奖励已到账':'奖励已到账，挑战危险合约可获得更多零件',195,432,10,green,'center');}
+      if(mode==='lab'){art.panel(44,346,302,70,'#3c4837');text('实验补助 / 回收币',195,369,11,muted,'center');text('+'+Math.round(40*reveal),195,400,27,green,'center');text('共振 '+game.lab.links+' 次 / 武器命中 '+game.lab.hits+' 次',195,432,11,orange,'center');}else if(earned){[['回收币','+'+Math.round(earned.coins*reveal),orange],['经验','+'+Math.round(earned.xp*reveal),blue],['科技零件','+'+Math.round(earned.parts*reveal),green]].forEach(function(r,i){var x=44+i*104;art.panel(x,346,94,68,'#3c4837');text(r[0],x+47,369,10,muted,'center');text(r[1],x+47,399,23,r[2],'center');});text(mode==='lab'?'实验补助已到账 / 不计入每日竞速榜':earned.levels?'工程师升级至 LV.'+earned.level+(earned.level===2||earned.level===4?' / 新底盘已解锁':' / 升级零件已到账'):earned.first?'首通奖励已到账，机库可立即强化':earned.newStars?'星章突破奖励已到账':'奖励已到账，挑战危险合约可获得更多零件',195,432,10,green,'center');}
       else{text('本机今日最快 '+save.dailyBest[date]+' 秒',195,379,17,orange,'center');text('统一车辆 · 装备成长不影响每日榜',195,411,11,muted,'center');}
       button(mode==='lab'?(game.lab.id===core.lab.list.length?'实验完成 / 返回实验室':'下一场实验'):mode==='daily'?'再挑战一次':game.level===core.stages.length?'首章完成 · 返回航图':'下一工地',44,438,302,function(){if(mode==='lab'){if(game.lab.id<core.lab.list.length)beginLab(game.lab.id+1);else scene='lab';}else if(mode==='daily')startDaily();else if(game.level===core.stages.length)scene='campaign';else begin('tour',null,game.level+1);});
       button(mode==='lab'?'重试本关':mode==='daily'?'返回基地':'升级装备',44,496,144,function(){if(mode==='lab')beginLab(game.lab.id);else scene=mode==='daily'?'home':'garage';},true);button(mode==='lab'?'实验室':mode==='daily'?'分享战绩':'返回基地',202,496,144,function(){if(mode==='lab')scene='lab';else if(mode==='daily')shareChallenge();else scene='home';},true);
@@ -288,7 +291,7 @@
     }
     function accountPanel(){
       subHeader('user','工程师通行证','WECHAT ID / 微信身份');
-      art.panel(24,150,342,180,'#0b2034');art.icon('user',195,197,42,orange);
+      art.panel(24,150,342,180,'#2b372e');art.icon('user',195,197,42,orange);
       text(profile?profile.name:'游客工程师',195,256,24,ink,'center');text(profile?'已登录 · 跨设备识别同一账号':'登录后可参加每日竞速排行榜',195,293,11,muted,'center');
       text('仅使用微信平台身份，不读取头像、昵称或手机号',195,376,10,muted,'center');text('榜单公开展示系统代号和今日最佳用时',195,400,11,muted,'center');
       button(profile?'退出本次登录':socialBusy?'正在登录…':'微信一键登录',25,444,340,function(){if(socialBusy)return;if(profile){profile=null;if(platform.rememberLogin)platform.rememberLogin(false);notice('已退出，仍可本机试玩');}else login();});
@@ -312,7 +315,7 @@
       button('接受今日挑战',25,442,340,startDaily);navTile('user',profile?'已登录':'登录上榜',25,505,163,function(){scene='account';});navTile('share','邀请好友',200,505,165,shareChallenge);text('无需登录也可试玩；好友目标由分享者提供',195,592,10,muted,'center');button('返回基地',25,630,340,function(){scene='home';},true);
     }
     function viewport(){var insets=platform.insets||{top:0,bottom:0},height=canvas.height-insets.top-insets.bottom,s=Math.min(canvas.width/390,height/720);return{s:s,x:(canvas.width-390*s)/2,y:insets.top+(height-720*s)/2};}
-    function render(){art.setMotion(visualTime,fx.reduced());if(scene==='home'&&pendingChallenge){challenge=pendingChallenge;pendingChallenge=null;scene='challenge';}var v=viewport();ctx.setTransform(1,0,0,1,0,0);box(0,0,canvas.width,canvas.height,cream);ctx.setTransform(v.s,0,0,v.s,v.x,v.y);buttons=[];background();if(scene==='controls-help')controlsHelp();else if(scene==='mission-help')missionHelp();else if(scene==='briefing')briefingPanel();else if(scene==='jobs')jobsPanel();else if(scene==='lab')labPanel();else if(scene==='campaign')campaignPanel();else if(scene==='account')accountPanel();else if(scene==='leaderboard')leaderboardPanel();else if(scene==='challenge')challengePanel();else if(scene==='home')home();else if(scene==='garage')garage();else if(scene==='guide')guide();else if(scene==='records')records();else if(scene==='cloud'||scene==='cloud-confirm')cloudPanel();else{play();if(scene==='tools')toolsPanel();if(scene==='result'){buttons=[];result();}if(scene==='module')moduleChoice();if(scene==='leave'){buttons=[];box(0,0,390,720,'rgba(2,8,18,.92)');box(24,256,342,220,cream,22);text('先歇一会儿？',195,299,25,ink,'center');text('返回基地会放弃本局主线进度与未结算奖励',195,331,12,muted,'center');button('继续拆',44,355,302,function(){scene='play';});button('返回基地',44,413,302,function(){scene='home';},true);navTile('pulse',fx.reduced()?'动效 / 轻量':'动效 / 标准',44,482,302,function(){fx.setReduced(!fx.reduced());if(platform.rememberEffects)platform.rememberEffects(fx.reduced());notice(fx.reduced()?'已减少粒子，镜头即时切换':'标准动效已开启');});}}if(toastTime>0&&scene!=='controls-help'){var ty=scene3D&&scene==='play'?116:123;art.panel(35,ty,320,32,'#102b40');text(toast,195,ty+21,10,green,'center');}if(press&&!fx.reduced()){var pr=1-press.life/.35;ctx.globalAlpha=Math.max(0,1-pr);art.ring(press.x,press.y,8+pr*22,orange,1.5);ctx.globalAlpha=1;}if(scene3D)scene3D.render(['play','leave','result','module','tools'].indexOf(scene)>=0?game:null,v,canvas,visualTime,fx,focus);}
+    function render(){art.setMotion(visualTime,fx.reduced());if(scene==='home'&&pendingChallenge){challenge=pendingChallenge;pendingChallenge=null;scene='challenge';}var v=viewport();ctx.setTransform(1,0,0,1,0,0);box(0,0,canvas.width,canvas.height,cream);ctx.setTransform(v.s,0,0,v.s,v.x,v.y);buttons=[];background();if(scene==='controls-help')controlsHelp();else if(scene==='mission-help')missionHelp();else if(scene==='briefing')briefingPanel();else if(scene==='jobs')jobsPanel();else if(scene==='lab')labPanel();else if(scene==='campaign')campaignPanel();else if(scene==='account')accountPanel();else if(scene==='leaderboard')leaderboardPanel();else if(scene==='challenge')challengePanel();else if(scene==='home')home();else if(scene==='garage')garage();else if(scene==='guide')guide();else if(scene==='records')records();else if(scene==='cloud'||scene==='cloud-confirm')cloudPanel();else{play();if(scene==='tools')toolsPanel();if(scene==='result'){buttons=[];result();}if(scene==='module')moduleChoice();if(scene==='leave'){buttons=[];box(0,0,390,720,'rgba(2,8,18,.92)');box(24,256,342,220,cream,22);text('先歇一会儿？',195,299,25,ink,'center');text('返回基地会放弃本局主线进度与未结算奖励',195,331,12,muted,'center');button('继续拆',44,355,302,function(){scene='play';});button('返回基地',44,413,302,function(){scene='home';},true);navTile('pulse',fx.reduced()?'动效 / 轻量':'动效 / 标准',44,482,302,function(){fx.setReduced(!fx.reduced());if(platform.rememberEffects)platform.rememberEffects(fx.reduced());notice(fx.reduced()?'已减少粒子，镜头即时切换':'标准动效已开启');});}}if(toastTime>0&&scene!=='controls-help'){var ty=scene3D&&scene==='play'?116:123;art.panel(35,ty,320,32,'#343f32');text(toast,195,ty+21,10,green,'center');}if(press&&!fx.reduced()){var pr=1-press.life/.35;ctx.globalAlpha=Math.max(0,1-pr);art.ring(press.x,press.y,8+pr*22,orange,1.5);ctx.globalAlpha=1;}if(scene3D)scene3D.render(['play','leave','result','module','tools'].indexOf(scene)>=0?game:null,v,canvas,visualTime,fx,focus);}
     function point(p){var v=viewport();return{x:(p.x-v.x)/v.s,y:(p.y-v.y)/v.s};}
     platform.input(function(type,p){p=point(p);if(type==='cancel'){drag=false;touchStart=null;if(game)game.stop();return;}
       if(type==='down'){press={x:p.x,y:p.y,life:.35};var b=buttons.find(function(b){return p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h;});if(b){drag=false;touchStart=null;b.fn();if(game&&scene!=='play')game.stop();return;}

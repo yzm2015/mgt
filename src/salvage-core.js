@@ -16,7 +16,7 @@
     this.mission=missions.create(this.stage);this.groundDelivered=0;this.airDelivered=0;
     this.risk=!!(this.stage&&options&&options.risk);this.rig=this.stage&&options&&['hauler','striker'].indexOf(options.rig)>=0?options.rig:'balanced';this.storm={x:190,y:395,r:58,active:false};
     this.level=clamp(level||1,1,99);this.random=rng(seed);this.upgrades=upgrades||{magnet:0,cargo:0};
-    this.fxEvents=[];this.fxId=0;this.route=[];this.navGoal=null;this.deliveryFx=0;this.lastDeliveryFx=0;this.car={x:70,y:530};this.target=null;this.cargo=[];this.scrap=[];this.buildings=[];this.effects=[];this.heading=0;this.trail=[];this.lastTrail=-1;
+    this.blast={charges:[],timer:0,cooldown:0,warning:false,detonated:0};this.fxEvents=[];this.fxId=0;this.route=[];this.navGoal=null;this.deliveryFx=0;this.lastDeliveryFx=0;this.car={x:70,y:530};this.target=null;this.cargo=[];this.scrap=[];this.buildings=[];this.effects=[];this.heading=0;this.trail=[];this.lastTrail=-1;
     this.delivered=0;this.demolished=0;this.time=0;this.done=false;this.unloadClock=0;this.extracted=0;this.total=0;this.energy=1;this.boost=0;
     var layouts=[{x:196,y:483,w:96,h:67,floors:3},{x:96,y:343,w:82,h:66,floors:4},{x:270,y:284,w:98,h:73,floors:5}];
     this.variant=this.level===1?0:Math.floor(this.random()*3);
@@ -70,11 +70,14 @@
     this.combo=this.time<this.comboUntil?this.combo+1:1;this.comboUntil=this.time+(this.moduleId==='arc'?6:4);this.maxCombo=Math.max(this.maxCombo,this.combo);this.score+=100*this.combo;
     this.emitFx('core',a.x,a.y,this.combo);this.effects.push({x:a.x,y:a.y,text:'核心击破 ×'+this.combo,life:1});
     if(b.bolts.every(function(bolt){return bolt.removed;})){
-      this.emitFx('collapse',b.x,b.y);b.state='falling';this.demolished++;this.score+=500;this.pulses.push({x:b.x,y:b.y,r:this.moduleId==='arc'?205:170,life:.9,max:.9});
+      this.emitFx('collapse',b.x,b.y);b.fallDuration=b.fallDuration||1.6;b.state='falling';this.demolished++;this.score+=500;this.pulses.push({x:b.x,y:b.y,r:this.moduleId==='arc'?205:170,life:.9,max:.9});
       this.effects.push({x:b.x,y:b.y,text:'链式坍塌 +500',life:1.6});
       this.buildings.forEach(function(other){if(other!==b&&other.state==='standing')other.bolts.forEach(function(anchor){var dx=anchor.x-b.x,dy=anchor.y-b.y,d=Math.hypot(dx,dy),aim=b.fallVector&&(dx*b.fallVector.x+dy*b.fallVector.y)/Math.max(1,d)>.65;if(d<(aim?260:this.moduleId==='arc'?205:170))this.damageAnchor(other,anchor,aim?1.1:this.moduleId==='arc'?.8:.55);},this);},this);
     }
   };
+  Game.prototype.plantBlast=function(){var kit=this.blast;if(this.done||kit.timer>0||kit.cooldown>0||kit.charges.length>=3)return false;var choices=[];this.buildings.forEach(function(b){if(b.state!=='standing'||missions.shielded(this,b)||lab.blocked(this,b)||kit.charges.some(function(c){return c.building===b.id;}))return;b.bolts.forEach(function(a){var d=Math.hypot(a.x-this.car.x,a.y-this.car.y);if(!a.removed&&d<95)choices.push({b:b,a:a,d:d});},this);},this);choices.sort(function(a,b){return a.d-b.d;});if(!choices.length)return false;var c=choices[0];kit.charges.push({building:c.b.id,x:c.a.x,y:c.a.y,dx:c.b.x-this.car.x,dy:c.b.y-this.car.y});this.emitFx('plant',c.a.x,c.a.y);return true;};
+  Game.prototype.armBlast=function(){if(this.done||!this.blast.charges.length||this.blast.timer>0)return false;this.blast.timer=3;return true;};
+  Game.prototype.updateBlast=function(dt){var kit=this.blast;kit.cooldown=Math.max(0,kit.cooldown-dt);kit.charges=kit.charges.filter(function(c){return this.buildings[c.building].state==='standing';},this);if(!kit.charges.length){kit.timer=0;kit.warning=false;return;}kit.warning=kit.timer>0&&kit.charges.some(function(c){return Math.hypot(c.x-this.car.x,c.y-this.car.y)<105;},this);if(kit.timer<=0)return;kit.timer=Math.max(0,kit.timer-dt);if(kit.timer>0)return;var charges=kit.charges.slice();kit.charges=[];kit.cooldown=10;kit.detonated+=charges.length;charges.forEach(function(c){var b=this.buildings[c.building];this.emitFx('explosion',c.x,c.y);if(b.state!=='standing')return;b.blasted=true;b.fallDuration=2.6;var len=Math.hypot(c.dx,c.dy)||1;b.fallVector={x:c.dx/len,y:c.dy/len};if(Math.hypot(c.x-this.car.x,c.y-this.car.y)<105){this.energy=Math.max(0,this.energy-.35);this.effects.push({x:this.car.x,y:this.car.y,text:'冲击干扰 / 提前撤离',life:1.4});}b.bolts.forEach(function(a){this.damageAnchor(b,a,1.7);},this);},this);kit.warning=false;};
   Game.prototype.atDepot=function(){return Math.hypot(this.car.x-DEPOT.x,this.car.y-DEPOT.y)<DEPOT.r;};
   Game.prototype.move=function(x,y){this.route=[];this.navGoal=null;if(!this.done)this.target={x:clamp(x,22,368),y:clamp(y,240,620)};};
   Game.prototype.dropScrap=function(x,y,count){for(var i=0;i<count;i++){var angle=this.random()*Math.PI*2,d=18+this.random()*48;this.scrap.push({x:clamp(x+Math.cos(angle)*d,22,368),y:clamp(y+Math.sin(angle)*d,242,620),vx:Math.cos(angle)*40,vy:Math.sin(angle)*40,rot:this.random()*6,kind:i%3});}};
@@ -93,13 +96,13 @@
       if(this.car.x>left&&this.car.x<right&&this.car.y>top&&this.car.y<bottom){var ds=[this.car.x-left,right-this.car.x,this.car.y-top,bottom-this.car.y],min=Math.min.apply(null,ds);if(min===ds[0])this.car.x=left;else if(min===ds[1])this.car.x=right;else if(min===ds[2])this.car.y=top;else this.car.y=bottom;}
     }
     if(this.atDepot()&&this.cargo.length){this.unloadClock+=dt;while(this.unloadClock>=.055&&this.cargo.length){if(this.lab&&this.lab.hits<this.lab.def.hits&&this.total-this.delivered<=4){this.unloadClock=0;break;}if(this.mission&&this.mission.kind==='airlift'&&this.total-this.delivered-1<Math.max(0,this.mission.target-this.airDelivered)){this.unloadClock=0;break;}this.unloadClock-=.055;this.cargo.pop();this.deliver(1);this.effects.push({x:DEPOT.x,y:DEPOT.y-15,text:'+1',life:.65});}}else this.unloadClock=0;
-    this.activeBolt=null;var candidates=[];
+    this.updateBlast(dt);this.activeBolt=null;var candidates=[];
     this.buildings.forEach(function(b){if(b.state==='standing')b.bolts.forEach(function(a){if(!a.removed)candidates.push({bolt:a,building:b,d:Math.hypot(a.x-this.car.x,a.y-this.car.y)});},this);},this);
     candidates.sort(function(a,b){return a.d-b.d;});
     if(candidates.length&&candidates[0].d<this.radius()){
       var c=candidates[0];this.activeBolt=c.bolt;this.damageAnchor(c.building,c.bolt,dt*(.7+clamp(Number(this.upgrades.magnet)||0,0,5)*.12)*(this.boost>0?2.1:1)/(1+Math.min(.55,(this.level-1)*.025)));
     }
-    this.buildings.forEach(function(b){if(b.state==='falling'){b.fall+=dt;if(b.fall>=.85){b.state='cleared';this.dropScrap(b.x,b.y,b.mass);}}},this);
+    this.buildings.forEach(function(b){if(b.state==='falling'){b.fall+=dt;if(b.fall>=(b.fallDuration||1.6)){b.state='cleared';this.emitFx('impact',b.x,b.y);this.dropScrap(b.x,b.y,b.mass);}}},this);
     for(var i=this.scrap.length-1;i>=0;i--){var s=this.scrap[i],sx=this.car.x-s.x,sy=this.car.y-s.y,dist=Math.hypot(sx,sy);s.x=clamp(s.x+s.vx*dt,20,370);s.y=clamp(s.y+s.vy*dt,240,625);s.vx*=Math.exp(-4*dt);s.vy*=Math.exp(-4*dt);
       if(this.cargo.length<this.capacity()&&dist<this.radius()){var pull=Math.min(dist,240*dt);if(dist>0){s.x+=sx/dist*pull;s.y+=sy/dist*pull;}if(dist<19){this.emitFx('pickup',s.x,s.y);this.cargo.push(s);this.scrap.splice(i,1);}}
     }

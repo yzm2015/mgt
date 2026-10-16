@@ -77,7 +77,7 @@ test('collapse shockwaves damage nearby towers without duplicating materials or 
   first.bolts.forEach(a=>g.damageAnchor(first,a,2));
   assert.equal(g.demolished,1);assert.ok(second.bolts.some(a=>a.hp<1));
   const score=g.score,extracted=g.extracted;first.bolts.forEach(a=>g.damageAnchor(first,a,100));
-  assert.equal(g.score,score);assert.equal(g.extracted,extracted);tick(g,1);
+  assert.equal(g.score,score);assert.equal(g.extracted,extracted);tick(g,first.fallDuration+.05);
   assert.equal(g.scrap.length+g.cargo.length+g.delivered,g.extracted+first.mass);
 });
 test('drone delivery conserves cargo, recharges pulse and obeys cooldown',()=>{
@@ -112,7 +112,7 @@ test('field module selection pauses simulation, applies via card input and resum
   start({canvas:{width:390,height:720,getContext:()=>context},load:()=>({}),save:()=>{},frame:fn=>{frame=fn;},input:fn=>{input=fn;},visibility:()=>{},event:()=>{},share:()=>{}},Object.assign({},core,{Game:TrackedGame}));
   function frames(n){for(let i=0;i<n;i++){now+=1000/60;frame(now);}}
   function click(x,y){input('down',{x,y});input('up',{x,y});frames(2);}
-  frames(1);click(100,578);g.buildings[0].bolts.forEach(a=>g.damageAnchor(g.buildings[0],a,2));frames(90);
+  frames(1);click(100,578);g.buildings[0].bolts.forEach(a=>g.damageAnchor(g.buildings[0],a,2));frames(120);
   assert.equal(g.moduleOffered,true);assert.ok(drawn.includes('选择你的拆解流派'));const time=g.time;frames(60);assert.equal(g.time,time);
   click(80,290);assert.equal(g.moduleId,'arc');frames(60);assert.ok(g.time>time);assert.equal(g.chooseModule('swarm'),false);
 });
