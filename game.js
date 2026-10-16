@@ -5,15 +5,18 @@ var cloudClient = require('./src/cloud-client')(wx, require('./src/cloud-config'
 cloudClient.connect();
 var canvas = wx.createCanvas();
 var info = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync();
-var ratio = Math.min(info.pixelRatio || 1, 3);
+var ratio = Math.min(info.pixelRatio || 1, 2);
 var menu = wx.getMenuButtonBoundingClientRect ? wx.getMenuButtonBoundingClientRect() : null;
 var safeTop = Math.max(info.safeArea ? info.safeArea.top : 24, menu ? menu.bottom + 8 : 24);
 canvas.width = info.windowWidth * ratio;
 canvas.height = info.windowHeight * ratio;
+var displayCanvas=canvas,scene3D=require('./src/scene3d')(displayCanvas);
+if(scene3D){canvas=wx.createCanvas();canvas.width=displayCanvas.width;canvas.height=displayCanvas.height;}
 wx.showShareMenu({withShareTicket: true});
 wx.onShareAppMessage(function () { return {title:'开着磁吸车，吸走整栋楼！磁吸拆迁队',query:require('./src/social').query(core.day())}; });
 start({
   canvas: canvas,
+  scene3D:scene3D,
   autoLogin:wx.getStorageSync('mgt-login-enabled')===true,
   rememberLogin:function(enabled){try{wx.setStorageSync('mgt-login-enabled',enabled);}catch(e){}},
   login:function(){return cloudClient.login();},
