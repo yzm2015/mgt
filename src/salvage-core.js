@@ -6,6 +6,7 @@
   function rng(seed){return function(){seed|=0;seed=seed+0x6D2B79F5|0;var t=Math.imul(seed^seed>>>15,1|seed);t^=t+Math.imul(t^t>>>7,61|t);return((t^t>>>14)>>>0)/4294967296;};}
   function hash(s){var h=2166136261;for(var i=0;i<s.length;i++)h=Math.imul(h^s.charCodeAt(i),16777619);return h>>>0;}
   function day(){return new Date(Date.now()+8*3600000).toISOString().slice(0,10);}
+  var planRoute=typeof module!=='undefined'?require('./navigation'):root.planMagnetRoute;
   var missions=typeof module!=='undefined'?require('./missions'):root.MagnetMissions;
   var growth=typeof module!=='undefined'?require('./progression'):root.MagnetGrowth;
   var stageData=typeof module!=='undefined'?require('./stages'):root.MagnetStages;
@@ -14,7 +15,7 @@
     this.mission=missions.create(this.stage);this.groundDelivered=0;this.airDelivered=0;
     this.risk=!!(this.stage&&options&&options.risk);this.rig=this.stage&&options&&['hauler','striker'].indexOf(options.rig)>=0?options.rig:'balanced';this.storm={x:190,y:395,r:58,active:false};
     this.level=clamp(level||1,1,99);this.random=rng(seed);this.upgrades=upgrades||{magnet:0,cargo:0};
-    this.car={x:70,y:530};this.target=null;this.cargo=[];this.scrap=[];this.buildings=[];this.effects=[];this.heading=0;this.trail=[];this.lastTrail=-1;
+    this.fxEvents=[];this.fxId=0;this.route=[];this.navGoal=null;this.deliveryFx=0;this.lastDeliveryFx=0;this.car={x:70,y:530};this.target=null;this.cargo=[];this.scrap=[];this.buildings=[];this.effects=[];this.heading=0;this.trail=[];this.lastTrail=-1;
     this.delivered=0;this.demolished=0;this.time=0;this.done=false;this.unloadClock=0;this.extracted=0;this.total=0;this.energy=1;this.boost=0;
     var layouts=[{x:196,y:483,w:96,h:67,floors:3},{x:96,y:343,w:82,h:66,floors:4},{x:270,y:284,w:98,h:73,floors:5}];
     this.variant=this.level===1?0:Math.floor(this.random()*3);
@@ -29,6 +30,9 @@
     }
     this.quota=Math.ceil(this.total*(this.stage?this.stage.quota:.75));this.pulses=[];this.dispatchCooldown=0;this.combo=0;this.comboUntil=0;this.maxCombo=0;this.score=0;this.moduleId='';this.moduleOffered=false;this.dashCooldown=0;this.dashTime=0;this.contractBonus=0;
   }
+  Game.prototype.emitFx=function(type,x,y,value){this.fxEvents.push({id:++this.fxId,type:type,x:x,y:y,value:value||0});if(this.fxEvents.length>64)this.fxEvents.shift();};
+  Game.prototype.navigate=function(x,y){var path=planRoute(this,x,y);if(!path.length)return false;this.route=path;this.navGoal=path[path.length-1];this.target=this.route.shift();return true;};
+  Game.prototype.stop=function(){this.route=[];this.navGoal=null;this.target=null;};
   Game.prototype.capacity=function(){return 12+(this.rig==='hauler'?6:this.rig==='striker'?-2:0)+clamp(Number(this.upgrades.cargo)||0,0,5)*5+(this.moduleId==='swarm'?8:0);};
   Game.prototype.radius=function(){return 66-(this.inStorm()?18:0)+clamp(Number(this.upgrades.magnet)||0,0,5)*9+(this.boost>0?38:0)+(this.moduleId==='drive'?18:0);};
   Game.prototype.pulseRadius=function(){return (this.moduleId==='arc'?178:148)+Math.min(5,this.upgrades.reactor||0)*6;};
@@ -43,12 +47,12 @@
   Game.prototype.dash=function(){if(this.done||this.dashCooldown>0)return false;this.dashCooldown=this.dashDelay();this.dashTime=.4;this.actions.dash++;return true;};
   Game.prototype.activate=function(){
     if(this.done||this.energy<1||this.boost>0)return false;
-    missions.pulse(this);this.actions.pulse++;this.energy=0;this.boost=this.moduleId==='drive'?8:5;this.pulses.push({x:this.car.x,y:this.car.y,r:this.pulseRadius(),life:.7,max:.7});
+    this.emitFx('pulse',this.car.x,this.car.y);missions.pulse(this);this.actions.pulse++;this.energy=0;this.boost=this.moduleId==='drive'?8:5;this.pulses.push({x:this.car.x,y:this.car.y,r:this.pulseRadius(),life:.7,max:.7});
     this.effects.push({x:this.car.x,y:this.car.y-24,text:'电磁脉冲',life:1});
     this.buildings.forEach(function(b){if(b.state==='standing')b.bolts.forEach(function(a){if(!a.removed&&Math.hypot(a.x-this.car.x,a.y-this.car.y)<this.pulseRadius())this.damageAnchor(b,a,1.05);},this);},this);
     return true;
   };
-  Game.prototype.deliver=function(count,source){if(source==='drone')this.airDelivered+=count;else this.groundDelivered+=count;this.delivered+=count;this.energy=Math.min(1,this.energy+count*.05);};
+  Game.prototype.deliver=function(count,source){if(source==='drone')this.airDelivered+=count;else this.groundDelivered+=count;this.delivered+=count;this.deliveryFx+=count;this.energy=Math.min(1,this.energy+count*.05);};
   Game.prototype.dispatch=function(){
     if(this.done||this.dispatchCooldown>0||!this.cargo.length)return false;
     var count=this.cargo.length;if(this.mission&&this.mission.kind==='ground'){var reserve=Math.max(0,this.mission.target-this.groundDelivered);count=Math.max(0,Math.min(count,this.total-this.delivered-reserve));}if(!count)return false;this.actions.drone++;this.cargo.splice(this.cargo.length-count,count);this.deliver(count,'drone');this.dispatchCooldown=this.droneDelay();
@@ -58,15 +62,15 @@
     if(b.state!=='standing'||a.removed||missions.shielded(this,b))return;a.hp-=damage;
     if(a.hp>0)return;a.removed=true;this.extracted++;this.dropScrap(a.x,a.y,1);
     this.combo=this.time<this.comboUntil?this.combo+1:1;this.comboUntil=this.time+(this.moduleId==='arc'?6:4);this.maxCombo=Math.max(this.maxCombo,this.combo);this.score+=100*this.combo;
-    this.effects.push({x:a.x,y:a.y,text:'核心击破 ×'+this.combo,life:1});
+    this.emitFx('core',a.x,a.y,this.combo);this.effects.push({x:a.x,y:a.y,text:'核心击破 ×'+this.combo,life:1});
     if(b.bolts.every(function(bolt){return bolt.removed;})){
-      b.state='falling';this.demolished++;this.score+=500;this.pulses.push({x:b.x,y:b.y,r:this.moduleId==='arc'?205:170,life:.9,max:.9});
+      this.emitFx('collapse',b.x,b.y);b.state='falling';this.demolished++;this.score+=500;this.pulses.push({x:b.x,y:b.y,r:this.moduleId==='arc'?205:170,life:.9,max:.9});
       this.effects.push({x:b.x,y:b.y,text:'链式坍塌 +500',life:1.6});
       this.buildings.forEach(function(other){if(other!==b&&other.state==='standing')other.bolts.forEach(function(anchor){if(Math.hypot(anchor.x-b.x,anchor.y-b.y)<(this.moduleId==='arc'?205:170))this.damageAnchor(other,anchor,this.moduleId==='arc'?.8:.55);},this);},this);
     }
   };
   Game.prototype.atDepot=function(){return Math.hypot(this.car.x-DEPOT.x,this.car.y-DEPOT.y)<DEPOT.r;};
-  Game.prototype.move=function(x,y){if(!this.done)this.target={x:clamp(x,22,368),y:clamp(y,240,620)};};
+  Game.prototype.move=function(x,y){this.route=[];this.navGoal=null;if(!this.done)this.target={x:clamp(x,22,368),y:clamp(y,240,620)};};
   Game.prototype.dropScrap=function(x,y,count){for(var i=0;i<count;i++){var angle=this.random()*Math.PI*2,d=18+this.random()*48;this.scrap.push({x:clamp(x+Math.cos(angle)*d,22,368),y:clamp(y+Math.sin(angle)*d,242,620),vx:Math.cos(angle)*40,vy:Math.sin(angle)*40,rot:this.random()*6,kind:i%3});}};
   Game.prototype.update=function(dt){
     if(this.done)return;dt=clamp(dt,0,.04);this.time+=dt;this.storm.active=!!(this.risk||this.mission&&this.mission.kind==='rescue')&&this.time%9>=5;this.storm.x=190+Math.sin(this.time*.3)*75;this.storm.y=390+Math.cos(this.time*.25)*55;this.boost=Math.max(0,this.boost-dt);this.dispatchCooldown=Math.max(0,this.dispatchCooldown-dt);this.energy=Math.min(1,this.energy+dt*(this.moduleId==='drive'?.055:.035)*(1+(this.upgrades.reactor||0)*.1));this.dashCooldown=Math.max(0,this.dashCooldown-dt);this.dashTime=Math.max(0,this.dashTime-dt);
@@ -74,6 +78,7 @@
     if(this.airlift)this.airlift.life=Math.max(0,this.airlift.life-dt);
     this.pulses.forEach(function(p){p.life-=dt;});this.pulses=this.pulses.filter(function(p){return p.life>0;});
     this.effects.forEach(function(e){e.life-=dt;});this.effects=this.effects.filter(function(e){return e.life>0;});
+    if(this.navGoal&&(!this.target||Math.hypot(this.target.x-this.car.x,this.target.y-this.car.y)<2)){if(this.route.length)this.target=this.route.shift();else this.stop();}
     if(this.target||this.dashTime>0){var dx=this.target?this.target.x-this.car.x:Math.sin(this.heading)*1000,dy=this.target?this.target.y-this.car.y:-Math.cos(this.heading)*1000,d=Math.hypot(dx,dy),speed=this.speed()*(this.inStorm()?.65:1),step=Math.min(d,speed*(this.dashTime>0?2.6:1)*dt);if(d>1){this.heading=Math.atan2(dy,dx)+Math.PI/2;if(this.dashTime>0&&this.time-this.lastTrail>.035){this.trail.push({x:this.car.x,y:this.car.y,heading:this.heading,life:.25});this.lastTrail=this.time;}this.car.x=clamp(this.car.x+dx/d*step,22,368);this.car.y=clamp(this.car.y+dy/d*step,240,620);}}
     // Resolve the vehicle against standing building footprints.
     for(var bi=0;bi<this.buildings.length;bi++){
@@ -90,11 +95,12 @@
     }
     this.buildings.forEach(function(b){if(b.state==='falling'){b.fall+=dt;if(b.fall>=.85){b.state='cleared';this.dropScrap(b.x,b.y,b.mass);}}},this);
     for(var i=this.scrap.length-1;i>=0;i--){var s=this.scrap[i],sx=this.car.x-s.x,sy=this.car.y-s.y,dist=Math.hypot(sx,sy);s.x=clamp(s.x+s.vx*dt,20,370);s.y=clamp(s.y+s.vy*dt,240,625);s.vx*=Math.exp(-4*dt);s.vy*=Math.exp(-4*dt);
-      if(this.cargo.length<this.capacity()&&dist<this.radius()){var pull=Math.min(dist,240*dt);if(dist>0){s.x+=sx/dist*pull;s.y+=sy/dist*pull;}if(dist<19){this.cargo.push(s);this.scrap.splice(i,1);}}
+      if(this.cargo.length<this.capacity()&&dist<this.radius()){var pull=Math.min(dist,240*dt);if(dist>0){s.x+=sx/dist*pull;s.y+=sy/dist*pull;}if(dist<19){this.emitFx('pickup',s.x,s.y);this.cargo.push(s);this.scrap.splice(i,1);}}
     }
     this.cargo.forEach(function(s,i){var prev=i?this.cargo[i-1]:this.car,dx=prev.x-s.x,dy=prev.y-s.y,d=Math.hypot(dx,dy);if(d>12){var t=Math.min(1,dt*12);s.x+=dx*(d-12)/d*t;s.y+=dy*(d-12)/d*t;}},this);
-    missions.update(this,dt);
-    if(this.demolished===this.buildings.length&&this.delivered>=this.quota&&this.buildings.every(function(b){return b.state==='cleared';})&&missions.complete(this)){this.done=true;this.contractBonus=this.maxCombo>=6?25:0;}
+    var missionBefore=this.mission?this.mission.value:0;missions.update(this,dt);if(this.mission&&missionBefore<this.mission.target&&this.mission.value>=this.mission.target)this.emitFx('objective',this.car.x,this.car.y);
+    if(this.deliveryFx>0&&this.time-this.lastDeliveryFx>=.35){this.emitFx('delivery',67,584,this.deliveryFx);this.deliveryFx=0;this.lastDeliveryFx=this.time;}
+    if(this.demolished===this.buildings.length&&this.delivered>=this.quota&&this.buildings.every(function(b){return b.state==='cleared';})&&missions.complete(this)){this.done=true;this.stop();this.contractBonus=this.maxCombo>=6?25:0;}
   };
   function cleanStages(raw){var out={};if(raw&&typeof raw==='object')stageData.list.forEach(function(s){var r=raw[s.id];if(r&&Number.isInteger(r.stars)&&r.stars>=1&&r.stars<=3&&Number.isInteger(r.seconds)&&r.seconds>=0&&r.seconds<=999999)out[s.id]={stars:r.stars,seconds:r.seconds};});return out;}
   function cleanSave(data){data=data&&typeof data==='object'?data:{};var u=data.upgrades||{},r=data.records||{};function n(value,max){return Number.isFinite(Number(value))?clamp(Math.floor(Number(value)),0,max):0;}return{progression:growth.clean(data.progression),level:clamp(Math.floor(Number(data.level)||1),1,99),coins:clamp(Math.floor(Number(data.coins)||0),0,9999999),upgrades:{magnet:clamp(Math.floor(Number(u.magnet)||0),0,5),cargo:clamp(Math.floor(Number(u.cargo)||0),0,5),engine:clamp(Math.floor(Number(u.engine)||0),0,5),reactor:clamp(Math.floor(Number(u.reactor)||0),0,5),drone:clamp(Math.floor(Number(u.drone)||0),0,5)},stageBest:cleanStages(data.stageBest),dailyBest:data.dailyBest&&typeof data.dailyBest==='object'?data.dailyBest:{},records:{completed:n(r.completed,9999999),bestScore:n(r.bestScore,999999999),maxCombo:n(r.maxCombo,999),recovered:n(r.recovered,999999999),recent:Array.isArray(r.recent)?r.recent.slice(0,6).filter(function(item){return item&&typeof item==='object';}).map(function(item){return{mode:item.mode==='daily'?'daily':'tour',level:clamp(n(item.level,99),1,99),score:n(item.score,999999999),seconds:n(item.seconds,999999),combo:n(item.combo,999)};}):[]}};}

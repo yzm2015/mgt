@@ -17,6 +17,8 @@ wx.onShareAppMessage(function () { return {title:'开着磁吸车，吸走整栋
 start({
   canvas: canvas,
   scene3D:scene3D,
+  reducedEffects:wx.getStorageSync('mgt-reduced-effects')===true,
+  rememberEffects:function(value){try{wx.setStorageSync('mgt-reduced-effects',value);}catch(e){}},
   autoLogin:wx.getStorageSync('mgt-login-enabled')===true,
   rememberLogin:function(enabled){try{wx.setStorageSync('mgt-login-enabled',enabled);}catch(e){}},
   login:function(){return cloudClient.login();},
