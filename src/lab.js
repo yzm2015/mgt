@@ -19,7 +19,7 @@
  [[130,480,76,62,4],[275,370,76,62,5],[110,270,76,62,4]],
  [[102,450,66,60,3],[290,450,66,60,3],[195,285,96,76,7]]
  ];
- var weapons=[{id:'hammer',name:'磁锤',icon:'pulse'},{id:'drill',name:'钻头',icon:'dash'},{id:'shield',name:'护盾',icon:'lock'}];
+ var weapons=[{id:'hammer',name:'磁锤',icon:'hammer'},{id:'drill',name:'钻头',icon:'drill'},{id:'shield',name:'护盾',icon:'shield'}];
  function init(g,id){var n=Math.max(1,Math.min(list.length,Math.floor(Number(id)||1))),def=list[n-1];g.lab={id:n,def:def,links:0,hits:0,cooldown:0,weapon:'hammer',weaponCooldown:0,shield:0,shot:null,attack:null,nextAttack:5};
  g.mission={kind:'lab',label:'共振 '+def.links+' 次 / 武器命中 '+def.hits+' 次',help:def.tip+' 塔下按钮切换 关闭→红＋→蓝−；共振距离覆盖全部工地。保留至少 4 件货物可用武器，送走后暂时失去武器。完成主线、拆完三塔并回收配额即可过关。',value:0,target:1,nodes:[],passenger:null};
  g.buildings.forEach(function(b){b.pole=0;b.accent='#65edff';b.bolts.forEach(function(a){a.hp=a.maxHp=(def.armor||1);});});

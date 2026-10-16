@@ -81,7 +81,12 @@
       else if(name==='star'){var points=[];for(var si=0;si<10;si++){var a=-Math.PI/2+si*Math.PI/5,r=si%2?4.5:10;points.push([Math.cos(a)*r,Math.sin(a)*r]);}stroke(points,true);}
       else if(name==='lock'){stroke([[-7,-1],[7,-1],[7,9],[-7,9]],true);ctx.beginPath();ctx.arc(0,-3,5,Math.PI,0);ctx.stroke();line(-5,-3,-5,-1,color);line(5,-3,5,-1,color);line(0,3,0,6,color);}
       else if(name==='route'){stroke([[-8,8],[-8,-7],[7,-7],[7,7]]);dot(-8,8,3);dot(7,7,3);dot(7,-7,2);}
-      else if(name==='shield'){stroke([[0,-11],[9,-7],[7,3],[0,11],[-7,3],[-9,-7]],true);stroke([[-4,0],[-1,4],[5,-4]]);}
+        else if(name==='shield'){stroke([[0,-11],[9,-7],[7,3],[0,11],[-7,3],[-9,-7]],true);stroke([[-4,0],[-1,4],[5,-4]]);}
+        else if(name==='hammer'){stroke([[-4,-9],[9,-5],[6,3],[-7,-1]],true);stroke([[-3,1],[-9,9],[-6,11],[1,3]],true);line(-1,-7,5,-5,color);}
+        else if(name==='drill'){stroke([[-9,5],[-5,9],[9,-9]],true);stroke([[-7,2],[-2,7]]);stroke([[-3,-2],[2,3]]);stroke([[1,-6],[6,-1]]);line(-10,8,-8,10,color);}
+        else if(name==='resonate'){dot(0,0,3);stroke([[-10,-8],[-5,-3],[-5,3],[-10,8]]);stroke([[10,-8],[5,-3],[5,3],[10,8]]);line(0,-11,0,-7,color);line(0,7,0,11,color);line(-11,0,-8,0,color);line(8,0,11,0,color);}
+        else if(name==='strike'){ctx.beginPath();ctx.arc(0,0,8,-.4,1.1);ctx.stroke();ctx.beginPath();ctx.arc(0,0,8,2.7,4.2);ctx.stroke();stroke([[2,-10],[-4,1],[2,1],[-2,10],[7,-3],[1,-3]],true);}
+        else if(name.indexOf('tower-')===0){stroke([[-8,10],[-8,-8],[0,-11],[8,-8],[8,10]],true);line(-11,10,11,10,color);line(-4,5,-2,5,color);line(2,5,4,5,color);if(name==='tower-plus'){line(-4,-3,4,-3,color);line(0,-7,0,1,color);}else if(name==='tower-minus')line(-4,-3,4,-3,color,2.4);else if(name==='tower-cleared')stroke([[-4,-3],[-1,0],[5,-6]]);else{dot(0,-3,4);line(-3,0,3,-6,color);}}
       else if(name==='bolt'){stroke([[2,-11],[-8,2],[-1,2],[-3,11],[8,-3],[1,-3]],true);}
       else if(name==='play')stroke([[-5,-8],[8,0],[-5,8]],true);
       else if(name==='pause'){line(-4,-7,-4,7,color,3);line(4,-7,4,7,color,3);}
