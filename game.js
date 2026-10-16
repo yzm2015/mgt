@@ -20,6 +20,7 @@ wx.onShareAppMessage(function () { return {title:'开着磁吸车，吸走整栋
 start({
   canvas: canvas,
   scene3D:scene3D,
+  paint:wx.getStorageSync('mgt-paint')||'sand',rememberPaint:function(v){try{wx.setStorageSync('mgt-paint',v);return true;}catch(e){return false;}},
   reducedEffects:wx.getStorageSync('mgt-reduced-effects')===true,
   rememberEffects:function(value){try{wx.setStorageSync('mgt-reduced-effects',value);}catch(e){}},
   autoLogin:wx.getStorageSync('mgt-login-enabled')===true,

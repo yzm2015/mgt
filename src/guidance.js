@@ -4,6 +4,7 @@
  function hint(game){var m=game.mission,p;
   function result(label,target,icon){return{label:label,target:target||null,icon:icon||'route'};}
   if(game.blast&&game.blast.timer>0){var exits=[{x:22,y:240},{x:368,y:240},{x:22,y:620},{x:368,y:620}].filter(function(p){return game.blast.charges.every(function(c){return Math.hypot(c.x-p.x,c.y-p.y)>125;});});return result('撤离警戒圈 / 点击前往安全位置',nearest(game,exits),'home');}
+  var emergencies=(typeof module!=='undefined'?require('./missions'):root.MagnetMissions).emergencyHint(game);if(emergencies)return emergencies;
   var local=game.mission&&game.mission.kind!=='lab'&&game.mission.value<game.mission.target?game.mission&&((typeof module!=='undefined'?require('./missions'):root.MagnetMissions).feedback(game)):null;if(local&&local.action)return result(local.label,null,local.action);
   if(game.lab){var l=game.lab;
    if(l.def.blast&&(game.blast.detonated<l.def.blast||game.blast.safeDetonated<l.def.safe))return result('靠近建筑布设爆破，启动后撤离警戒圈',nearest(game,game.buildings.filter(function(b){return b.state==='standing';}).reduce(function(a,b){return a.concat(b.bolts.filter(function(v){return !v.removed;}));},[])),'bomb');

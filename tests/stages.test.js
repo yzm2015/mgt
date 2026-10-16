@@ -11,6 +11,8 @@ function route(g,target){
 test('all eight standard and storm contracts can be completed with real movement and zero upgrades',()=>{
  for(const risk of [false,true])for(const stage of core.stages){const g=new core.Game(core.hash('yard-'+stage.id),stage.id,{magnet:0,cargo:0},{stage:stage.id,risk});
   assert.equal(g.stage.name,stage.name);
+  if(g.incidents.length){tick(g,19);for(const e of g.incidents){route(g,e);if(e.kind==='fire'){core.missions.respond(g);tick(g,7);}else{tick(g,.3);route(g,core.depot);tick(g,1);}assert.equal(e.state,'resolved');}}
+
   if(['switch','power','collect','rescue','charge','dash'].includes(g.mission.kind))for(const n of g.mission.nodes){
    route(g,n);
    if(g.mission.kind==='switch'||g.mission.kind==='power')tick(g,2.2);

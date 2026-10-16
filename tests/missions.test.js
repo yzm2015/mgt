@@ -35,3 +35,15 @@ test('nearby mission feedback explains required actions, order, waiting and occu
  g=yard(6);n=g.mission.nodes[1];g.car={x:n.x,y:n.y};assert.match(core.missions.feedback(g).label,/先通过 1 号/);assert.equal(core.missions.feedback(g).action,null);g.car={...g.mission.nodes[0]};assert.equal(core.missions.feedback(g).action,'dash');
  g=yard(8);g.car={...g.mission.nodes[0]};step(g,.04);g.car={...g.mission.nodes[1]};assert.match(core.missions.feedback(g).label,/座位已满/);
 });
+test('incidents stop unsafe demolition, cancel a fuse, rescue pedestrians and never replay',()=>{
+ const g=yard(5),b=g.buildings[0],a=b.bolts[0];g.car={x:a.x,y:a.y};g.plantBlast();g.armBlast();g.time=8;step(g,.04);const e=g.incidents[0];assert.equal(e.state,'active');assert.equal(g.blast.timer,0);const hp=a.hp;g.damageAnchor(b,a,99);assert.equal(a.hp,hp);assert.equal(g.armBlast(),false);g.car={x:e.x,y:e.y};step(g,.04);assert.equal(e.state,'aboard');g.car={x:67,y:584};step(g,.04);assert.equal(e.state,'resolved');step(g,30);assert.equal(e.state,'resolved');g.damageAnchor(b,a,99);assert.equal(a.removed,true);
+});
+test('fire requires a deliberate response, pauses out of range, and the rescue vehicle is faster',()=>{
+ for(const rig of ['balanced','rescue']){const g=yard(7);g.time=8;step(g,.04);const e=g.incidents[0];g.car={x:e.x,y:e.y};step(g,4);assert.equal(e.progress,0);g.rig=rig;assert.equal(core.missions.respond(g),true);step(g,3.2);assert.equal(e.state,rig==='rescue'?'resolved':'active');if(rig==='balanced'){const p=e.progress;g.car={x:200,y:600};step(g,1);assert.equal(e.progress,p);g.car={x:e.x,y:e.y};core.missions.respond(g);step(g,3.2);assert.equal(e.state,'resolved');}}
+});
+test('vehicle swaps require the depot, preserve cargo, and skins do not affect daily competition',()=>{
+ const g=yard(5);assert.equal(g.switchVehicle('rescue'),false);g.car={x:67,y:584};g.cargo=Array.from({length:18},()=>({x:67,y:584}));assert.equal(g.switchVehicle('hauler'),true);assert.equal(g.capacity(),18);assert.equal(g.switchVehicle('striker'),true);assert.equal(g.cargo.length,18);assert.equal(g.switchVehicle('rescue'),true);assert.equal(g.rig,'rescue');assert.equal(new core.Game(1,4).switchVehicle('rescue'),false);assert.equal(new core.Game(1,1,{}, {stage:1,skin:'forest'}).skin,'forest');assert.equal(new core.Game(1,1,{}, {skin:'bad'}).skin,'sand');
+});
+test('simultaneous incidents let the player choose fire first and fall back to the pedestrian after resolution',()=>{
+ const g=yard(8);g.time=19;step(g,.04);g.incidentFocus=1;assert.equal(core.missions.incident(g).kind,'fire');const fire=g.incidents[1];g.car={x:fire.x,y:fire.y};core.missions.respond(g);step(g,6.2);assert.equal(fire.state,'resolved');assert.equal(core.missions.incident(g).kind,'person');assert.equal(g.incidents[0].state,'active');
+});
