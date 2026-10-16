@@ -15,7 +15,7 @@
  function update(game,dt){var m=game.mission;if(!m)return;
   if(m.kind==='ground')m.value=Math.min(m.target,game.groundDelivered);
   if(m.kind==='airlift')m.value=Math.min(m.target,game.airDelivered);
-  m.nodes.forEach(function(n){if(n.active)return;var near=Math.hypot(n.x-game.car.x,n.y-game.car.y)<27;
+  m.nodes.forEach(function(n){if(n.active)return;var near=Math.hypot(n.x-game.car.x,n.y-game.car.y)<=32;
    if(m.kind==='switch'||m.kind==='power'){if(near)n.charge=Math.min(1,n.charge+dt/(m.kind==='power'?2:1.5));if(n.charge>=1){n.active=true;m.value++;game.energy=1;game.effects.push({x:n.x,y:n.y,text:'屏障已解除',life:1.5});}}
    if(m.kind==='collect'&&near){n.active=true;m.value++;game.energy=Math.min(1,game.energy+.35);}
    if(m.kind==='dash'&&n.id===m.value&&near&&game.dashTime>0){n.active=true;m.value++;game.effects.push({x:n.x,y:n.y,text:'航标 '+m.value+' 已通过',life:1});}
@@ -24,5 +24,14 @@
   if(m.kind==='rescue'&&m.passenger!==null&&game.atDepot()){m.passenger=null;m.value++;game.effects.push({x:67,y:560,text:'工程师已安全送达',life:2});}
  }
  function pulse(game){var m=game.mission;if(!m||m.kind!=='charge')return;m.nodes.forEach(function(n){if(!n.active&&Math.hypot(n.x-game.car.x,n.y-game.car.y)<game.pulseRadius()){n.active=true;n.charge=1;m.value++;game.effects.push({x:n.x,y:n.y,text:'电容充能完成',life:1.5});}});}
- var api={definitions:definitions,create:create,shielded:shielded,update:update,pulse:pulse,complete:function(game){return!game.mission||game.mission.value>=game.mission.target;}};if(typeof module!=='undefined')module.exports=api;else root.MagnetMissions=api;
+ function feedback(game){var m=game.mission;if(!m||!m.nodes.length)return null;var nodes=m.nodes.slice().sort(function(a,b){return Math.hypot(a.x-game.car.x,a.y-game.car.y)-Math.hypot(b.x-game.car.x,b.y-game.car.y);}),n=nodes[0];if(Math.hypot(n.x-game.car.x,n.y-game.car.y)>48)return null;var prefix=(n.id+1)+' 号 / ',inside=Math.hypot(n.x-game.car.x,n.y-game.car.y)<=32;
+  if(n.active)return{node:n,label:prefix+(m.kind==='rescue'&&m.passenger===n.id?'工程师已上车，请返回中枢':'已完成，请前往下一目标')};
+  if(!inside)return{node:n,label:prefix+'再靠近一点，驶入目标圈'};
+  if(m.kind==='switch'||m.kind==='power')return{node:n,label:prefix+'保持停留，启动 '+Math.round(n.charge*100)+'%'};
+  if(m.kind==='charge')return{node:n,label:prefix+(game.energy>=1?'点击右下角脉冲激活':'脉冲充能 '+Math.floor(game.energy*100)+'% / 回收可加速'),action:'pulse'};
+  if(m.kind==='dash')return{node:n,label:prefix+(n.id!==m.value?'顺序未到，请先通过 '+(m.value+1)+' 号':game.dashCooldown>0?'推进冷却 '+Math.ceil(game.dashCooldown)+' 秒':'点击右下角推进通过'),action:n.id===m.value?'dash':null};
+  if(m.kind==='rescue'&&m.passenger!==null)return{node:n,label:prefix+'座位已满，请先返回中枢送人'};
+  return{node:n,label:prefix+'驶入目标圈自动收集'};
+ }
+ var api={feedback:feedback,definitions:definitions,create:create,shielded:shielded,update:update,pulse:pulse,complete:function(game){return!game.mission||game.mission.value>=game.mission.target;}};if(typeof module!=='undefined')module.exports=api;else root.MagnetMissions=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

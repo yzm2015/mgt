@@ -29,3 +29,9 @@ test('main objective opens a readable briefing and pauses simulation until the p
  const start=require('../src/salvage-app');let input,frame,g,now=1000,texts=[];const ctx=new Proxy({fillText:t=>texts.push(t)},{get:(o,k)=>o[k]||(()=>{}),set:(o,k,v)=>(o[k]=v,true)});class Game extends core.Game{constructor(...args){super(...args);g=this;}}
  start({canvas:{width:390,height:720,getContext:()=>ctx},load:()=>({}),save:()=>true,frame:f=>frame=f,input:f=>input=f,visibility:()=>{},event:()=>{},share:()=>{}},Object.assign({},core,{Game}));function draw(){texts=[];frame(now+=30);}function click(x,y){input('down',{x,y});input('up',{x,y});draw();}draw();click(100,578);click(195,144);assert.ok(texts.includes('本关作战简报'));const before=g.time;for(let i=0;i<10;i++)draw();assert.equal(g.time,before);click(195,512);draw();assert.ok(g.time>before);
 });
+test('nearby mission feedback explains required actions, order, waiting and occupied rescue seats',()=>{
+ let g=yard(2),n=g.mission.nodes[0];g.car={x:n.x+31,y:n.y};step(g,.4);assert.ok(n.charge>0);assert.match(core.missions.feedback(g).label,/保持停留/);
+ g=yard(4);n=g.mission.nodes[0];g.car={x:n.x,y:n.y};assert.equal(core.missions.feedback(g).action,'pulse');g.energy=.3;assert.match(core.missions.feedback(g).label,/充能 30%/);g.energy=1;g.activate();assert.match(core.missions.feedback(g).label,/已完成/);
+ g=yard(6);n=g.mission.nodes[1];g.car={x:n.x,y:n.y};assert.match(core.missions.feedback(g).label,/先通过 1 号/);assert.equal(core.missions.feedback(g).action,null);g.car={...g.mission.nodes[0]};assert.equal(core.missions.feedback(g).action,'dash');
+ g=yard(8);g.car={...g.mission.nodes[0]};step(g,.04);g.car={...g.mission.nodes[1]};assert.match(core.missions.feedback(g).label,/座位已满/);
+});
