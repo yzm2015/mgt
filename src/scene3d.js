@@ -6,11 +6,12 @@
   var matrix=new Float32Array([right[0]/w,up[0]/h,-2*back[0]/(far-near),0,right[1]/w,up[1]/h,-2*back[1]/(far-near),0,right[2]/w,up[2]/h,-2*back[2]/(far-near),0,0,-18*up[1]/h,(2*d+36*back[1]-far-near)/(far-near),1]);
   return{matrix:matrix,right:right,up:up,back:back,w:w,h:h,target:t};
  }
- function project(p,cam,rect){var v=[p[0],p[1]-18,p[2]],dot=function(a){return a[0]*v[0]+a[1]*v[1]+a[2]*v[2];};return{x:rect.x+(dot(cam.right)/cam.w+1)*rect.w/2,y:rect.y+(1-dot(cam.up)/cam.h)*rect.h/2};}
- function ground(p,cam,rect){var nx=((p.x-rect.x)/rect.w*2-1)*cam.w,ny=(1-(p.y-rect.y)/rect.h*2)*cam.h,r=cam.right,u=cam.up,b=cam.back,t=(18+u[1]*ny)/b[1];return{x:r[0]*nx+u[0]*ny-b[0]*t+195,y:r[2]*nx+u[2]*ny-b[2]*t+430};}
+ function perspective(angle,aspect){var cam=camera(angle,aspect),e=.6,f=Math.sqrt(1-e*e),sn=Math.sin(angle),cs=Math.cos(angle);cam.up=[-sn*e,f,-cs*e];cam.back=[sn*f,e,cs*f];cam.perspective=true;cam.distance=720;cam.tan=Math.tan(28*Math.PI/180);var r=cam.right,u=cam.up,b=cam.back,kx=1/(cam.tan*aspect),ky=1/cam.tan,A=1801/1799,B=3600/1799;cam.aspect=aspect;cam.matrix=new Float32Array([r[0]*kx,u[0]*ky,-A*b[0],-b[0],r[1]*kx,u[1]*ky,-A*b[1],-b[1],r[2]*kx,u[2]*ky,-A*b[2],-b[2],0,-18*u[1]*ky,A*(720+18*b[1])-B,720+18*b[1]]);return cam;}
+ function project(p,cam,rect){var v=[p[0],p[1]-18,p[2]],dot=function(a){return a[0]*v[0]+a[1]*v[1]+a[2]*v[2];};var depth=cam.perspective?cam.distance-dot(cam.back):1,w=cam.perspective?depth*cam.tan*cam.aspect:cam.w,h=cam.perspective?depth*cam.tan:cam.h;return{x:rect.x+(dot(cam.right)/w+1)*rect.w/2,y:rect.y+(1-dot(cam.up)/h)*rect.h/2};}
+ function ground(p,cam,rect){if(cam.perspective){var sx=(p.x-rect.x)/rect.w*2-1,sy=1-(p.y-rect.y)/rect.h*2,r=cam.right,u=cam.up,b=cam.back,eye=[b[0]*cam.distance,18+b[1]*cam.distance,b[2]*cam.distance],ray=r.map(function(n,i){return n*sx*cam.tan*cam.aspect+u[i]*sy*cam.tan-b[i];}),t=-eye[1]/ray[1];return{x:eye[0]+ray[0]*t+195,y:eye[2]+ray[2]*t+430};}var nx=((p.x-rect.x)/rect.w*2-1)*cam.w,ny=(1-(p.y-rect.y)/rect.h*2)*cam.h,r=cam.right,u=cam.up,b=cam.back,t=(18+u[1]*ny)/b[1];return{x:r[0]*nx+u[0]*ny-b[0]*t+195,y:r[2]*nx+u[2]*ny-b[2]*t+430};}
  function create(canvas){
   var gl;try{gl=canvas.getContext('webgl',{alpha:false,antialias:true,preserveDrawingBuffer:false});if(!gl||typeof gl.getParameter(gl.VERSION)!=='string')return null;}catch(e){return null;}
-  var sceneProgram,hudProgram,buffer,quad,texture,angle=.38,targetAngle=.38,lastTime=null,lost=false,failed='',lastCam=null,rect={x:15,y:176,w:360,h:458},textureW=0,textureH=0,vertices=[];
+  var sceneProgram,hudProgram,buffer,quad,texture,angle=.38,targetAngle=.38,lastTime=null,lost=false,failed='',lastCam=null,rect={x:15,y:176,w:360,h:458},textureW=0,textureH=0,immersive=false,vertices=[];
   function shader(type,source){var sh=gl.createShader(type);gl.shaderSource(sh,source);gl.compileShader(sh);if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS))throw Error('3D_SHADER_FAILED');return sh;}
   function program(vs,fs){var v=shader(gl.VERTEX_SHADER,vs),f=shader(gl.FRAGMENT_SHADER,fs),p=gl.createProgram();gl.attachShader(p,v);gl.attachShader(p,f);gl.linkProgram(p);gl.deleteShader(v);gl.deleteShader(f);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw Error('3D_LINK_FAILED');return p;}
   function init(){
@@ -28,6 +29,7 @@
   function beam(x,z,xx,zz,y,c,width){var dx=xx-x,dz=zz-z;cube((x+xx)/2,y,(z+zz)/2,width||2,2,Math.hypot(dx,dz),c,Math.atan2(dx,dz));}
   function scene(g,time,fx,focus){var reduced=!!(fx&&fx.reduced());
    var cyan='#65edff',violet='#a48aff',green='#96ffd4',gold='#ffbd72';
+   if(immersive){cube(0,-11,0,1200,8,1200,'#0d1929');for(var road=-525;road<=525;road+=75){cube(road,-6,0,1,1,1100,'#1c3043');cube(0,-6,road,1100,1,1,'#1c3043');}for(var city=0;city<12;city++){var ca=city*Math.PI/6,cr=440+(city%3)*55,ch=70+(city%4)*40,cityX=Math.cos(ca)*cr,cityZ=Math.sin(ca)*cr;cube(cityX,ch/2-7,cityZ,60,ch,65,'#1a2d43');cube(cityX,ch-5,cityZ,63,3,68,'#335569');for(var win=16;win<ch-8;win+=19)cube(cityX,win,cityZ+33,38,3,1,'#346779');}}
    cube(0,-7,0,374,12,408,'#16283e');cube(0,-.7,0,360,1.4,394,'#102237');
    for(var x=-175;x<=175;x+=25)cube(x,.12,0,.6,.3,390,'#24435a');for(var z=-190;z<=190;z+=25)cube(0,.12,z,350,.3,.6,'#24435a');
    beam(-183,-200,183,-200,1,cyan,2);beam(-183,200,183,200,1,cyan,2);beam(-183,-200,-183,200,1,violet,2);beam(183,-200,183,200,1,violet,2);
@@ -39,7 +41,7 @@
    if(g.mission)g.mission.nodes.forEach(function(n){var mx=n.x-195,mz=n.y-430,c=n.active?'#325260':g.mission.kind==='rescue'?gold:g.mission.kind==='power'||g.mission.kind==='switch'?violet:cyan;ring(mx,mz,19+(reduced?0:Math.sin(time*3+n.id)*1.5),c,2,1.8);if(n.charge>0&&!n.active)ring(mx,mz,24,'#e5f4ff',2,2,n.charge);if(!n.active){cube(mx,2,mz,20,3,20,'#243b55');cube(mx,12+n.charge*10,mz,9,16+n.charge*20,9,c,time*.6);if(g.mission.kind==='dash')cube(mx,25,mz,24,2,4,c);}});
    if(g.lab){g.buildings.forEach(function(b){if(b.tension&&b.tension.life>0){beam(b.x-195,b.y-430,b.tension.x-195,b.tension.y-430,35,b.tension.kind==='attract'?'#ff829a':'#65caff',3);}});if(g.lab.attack){var a=g.lab.attack;ring(a.x-195,a.y-430,48,'#ff637f',3,2);ring(a.x-195,a.y-430,48,'#ffc272',4,3,1-a.left/1.8);}}
    g.buildings.forEach(function(b){var bx=b.x-195,bz=b.y-430,c=b.pole===1?'#ff829a':b.pole===-1?'#65caff':b.accent||cyan,fall=b.state==='falling'?Math.min(1,b.fall/.85):b.state==='cleared'?1:0,height=(b.floors*18+18)*(1-fall),shield=g.mission&&(g.mission.kind==='switch'&&b.id===2&&g.mission.value<2||g.mission.kind==='power'&&!g.mission.nodes[b.id].active)||g.lab&&g.lab.def.boss&&b.id===2&&g.demolished<2;
-    cube(bx,1,bz,b.w+12,1,b.h+12,'#080f1e');
+    cube(bx+14,.7,bz-16,b.w+35,1,b.h+40,'#080f1e');cube(bx,1,bz,b.w+12,1,b.h+12,'#080f1e');
     if(b.state==='falling'){
       for(var layer=0;layer<b.floors;layer++){var push=fall*fall,ly=Math.max(3,(layer*18+10)*(1-push*1.7)),lx=bx+Math.sin(layer*2.4+b.id)*push*23+(b.fallVector?b.fallVector.x*push*65:0),lz=bz+Math.cos(layer*2.1)*push*20+(b.fallVector?b.fallVector.y*push*65:0);cube(lx,ly,lz,b.w*(1-fall*.12),Math.max(3,15*(1-fall*.6)),b.h,'#35586d',Math.sin(layer+1)*fall*.2);cube(lx,ly+7,lz,b.w-12,1,b.h-12,c,Math.sin(layer+1)*fall*.2);}
       ring(bx,bz,20+fall*66,'#ffbd72',2,2);return;
@@ -69,7 +71,7 @@
    if(g.storm.active){ring(g.storm.x-195,g.storm.y-430,g.storm.r,violet,4,2);for(var i=0;i<9;i++){var a=time*2+i*Math.PI*2/9;cube(g.storm.x-195+Math.cos(a)*g.storm.r,15+Math.sin(time*3+i)*7,g.storm.y-430+Math.sin(a)*g.storm.r,3,22,3,violet,a);}}
   }
   function attrib(p,name,size,stride,offset){var loc=gl.getAttribLocation(p,name);gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,size,gl.FLOAT,false,stride,offset);return loc;}
-  function prepare(time,reduced){var dt=lastTime===null?0:Math.max(0,Math.min(.05,time-lastTime));lastTime=time;angle=reduced?targetAngle:angle+(targetAngle-angle)*(1-Math.exp(-12*dt));if(Math.abs(targetAngle-angle)<.0001)angle=targetAngle;lastCam=camera(angle,rect.w/rect.h,rect.h<400?1.3:1);}
+  function prepare(time,reduced){var dt=lastTime===null?0:Math.max(0,Math.min(.05,time-lastTime));lastTime=time;angle=reduced?targetAngle:angle+(targetAngle-angle)*(1-Math.exp(-12*dt));if(Math.abs(targetAngle-angle)<.0001)angle=targetAngle;lastCam=immersive?perspective(angle,rect.w/rect.h):camera(angle,rect.w/rect.h,rect.h<400?1.3:1);}
   function render(game,view,hud,time,fx,focus){
    if(lost||failed)return false;
    gl.disable(gl.SCISSOR_TEST);gl.viewport(0,0,canvas.width,canvas.height);gl.clearColor(.024,.055,.105,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
@@ -78,7 +80,7 @@
    if(textureW!==hud.width||textureH!==hud.height){gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,hud);textureW=hud.width;textureH=hud.height;}else gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,gl.RGBA,gl.UNSIGNED_BYTE,hud);
    gl.uniform1i(gl.getUniformLocation(hudProgram,'uHUD'),0);gl.drawArrays(gl.TRIANGLES,0,6);attrs.forEach(function(a){gl.disableVertexAttribArray(a);});return true;
   }
-  return{layout:function(compact){rect.h=compact?282:458;},render:render,prepare:prepare,rotate:function(step){targetAngle+=step;},reset:function(){targetAngle=angle+Math.atan2(Math.sin(.38-angle),Math.cos(.38-angle));},groundPoint:function(p){if(!lastCam)return null;var hit=ground(p,lastCam,rect);return hit.x>=20&&hit.x<=370&&hit.y>=238&&hit.y<=625?hit:null;},project:function(x,y,height){return project([x-195,height||0,y-430],lastCam||camera(angle,rect.w/rect.h),rect);},status:function(){return lost?'lost':failed?'failed':'ready';}};
+  return{layout:function(compact){immersive=compact==='immersive';rect.x=immersive?0:15;rect.y=immersive?76:176;rect.w=immersive?390:360;rect.h=immersive?568:compact?282:458;},render:render,prepare:prepare,rotate:function(step){targetAngle+=step;},reset:function(){targetAngle=angle+Math.atan2(Math.sin(.38-angle),Math.cos(.38-angle));},groundPoint:function(p){if(!lastCam)return null;var hit=ground(p,lastCam,rect);return hit.x>=20&&hit.x<=370&&hit.y>=238&&hit.y<=625?hit:null;},project:function(x,y,height){return project([x-195,height||0,y-430],lastCam||camera(angle,rect.w/rect.h),rect);},status:function(){return lost?'lost':failed?'failed':'ready';}};
  }
- create.camera=camera;create.project=project;create.ground=ground;if(typeof module!=='undefined')module.exports=create;else root.createMagnet3D=create;
+ create.perspective=perspective;create.camera=camera;create.project=project;create.ground=ground;if(typeof module!=='undefined')module.exports=create;else root.createMagnet3D=create;
 })(typeof globalThis!=='undefined'?globalThis:this);
