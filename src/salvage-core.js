@@ -61,7 +61,8 @@
   Game.prototype.deliver=function(count,source){if(source==='drone')this.airDelivered+=count;else this.groundDelivered+=count;this.delivered+=count;this.deliveryFx+=count;this.energy=Math.min(1,this.energy+count*.05);};
   Game.prototype.dispatch=function(){
     if(this.done||this.dispatchCooldown>0||!this.cargo.length)return false;
-    var count=this.cargo.length;if(this.lab&&this.lab.hits<this.lab.def.hits)count=Math.max(0,Math.min(count,this.total-this.delivered-4));if(this.mission&&this.mission.kind==='ground'){var reserve=Math.max(0,this.mission.target-this.groundDelivered);count=Math.max(0,Math.min(count,this.total-this.delivered-reserve));}if(!count)return false;this.actions.drone++;this.cargo.splice(this.cargo.length-count,count);this.deliver(count,'drone');this.dispatchCooldown=this.droneDelay();
+    if(this.lab&&this.lab.def.ground){var groundReserve=Math.max(0,this.lab.def.ground-this.groundDelivered);if(this.total-this.delivered-groundReserve<=0)return false;}
+    var count=this.cargo.length;if(this.lab&&this.lab.def.ground)count=Math.max(0,Math.min(count,this.total-this.delivered-Math.max(0,this.lab.def.ground-this.groundDelivered)));if(this.lab&&this.lab.hits<this.lab.def.hits)count=Math.max(0,Math.min(count,this.total-this.delivered-4));if(this.mission&&this.mission.kind==='ground'){var reserve=Math.max(0,this.mission.target-this.groundDelivered);count=Math.max(0,Math.min(count,this.total-this.delivered-reserve));}if(!count)return false;this.actions.drone++;this.cargo.splice(this.cargo.length-count,count);this.deliver(count,'drone');this.dispatchCooldown=this.droneDelay();
     this.effects.push({x:this.car.x,y:this.car.y,text:'无人机回收 +'+count,life:1.4});this.airlift={x:this.car.x,y:this.car.y,life:1.2};return true;
   };
   Game.prototype.damageAnchor=function(b,a,damage){

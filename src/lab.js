@@ -11,7 +11,9 @@
  {name:'铁穹守卫',tip:'先拆两座护卫塔，再拆中央首领；红圈蓄力时离开。',links:2,hits:3,armor:2,boss:true},
  {name:'仓区初爆',tip:'靠近布设，启动后撤离，完成一次安全爆破。',links:0,hits:0,blast:1,safe:1},
  {name:'双区联拆',tip:'布设两个爆破点，撤离后同时起爆；也可分次完成。',links:0,hits:0,blast:2,safe:2,armor:1.5},
- {name:'重装清场',tip:'完成三个安全爆破点计数，再清除装甲与回收废料。',links:0,hits:0,blast:3,safe:3,armor:2}
+ {name:'重装清场',tip:'完成三个安全爆破点计数，再清除装甲与回收废料。',links:0,hits:0,blast:3,safe:3,armor:2},
+ {name:'拆运协同',tip:'安全爆破两处，运回中枢交付 12 件材料，再完成清场。',links:0,hits:0,blast:2,safe:2,ground:12,armor:1.5},
+ {name:'风中清运',tip:'风暴中完成三处安全爆破，地面交付 18 件材料。',links:0,hits:0,blast:3,safe:3,ground:18,armor:2,storm:true}
  ];
  var layouts=[
  [[196,483,86,62,3],[100,345,76,60,4],[276,290,82,65,5]],
@@ -23,16 +25,20 @@
  [[102,450,66,60,3],[290,450,66,60,3],[195,285,96,76,7]],
  [[120,485,76,60,3],[270,390,80,64,4],[125,275,74,58,4]],
  [[195,475,86,60,4],[95,325,70,60,4],[280,305,74,60,5]],
- [[110,460,72,64,5],[280,410,76,62,5],[190,265,88,60,6]]
+ [[110,460,72,64,5],[280,410,76,62,5],[190,265,88,60,6]],
+ [[150,460,72,60,4],[280,335,72,62,4],[100,275,70,60,5]],
+ [[265,465,76,60,5],[110,365,74,62,5],[275,265,74,60,6]]
  ];
  var weapons=[{id:'hammer',name:'磁锤',icon:'hammer'},{id:'drill',name:'钻头',icon:'drill'},{id:'shield',name:'护盾',icon:'shield'}];
  function init(g,id){var n=Math.max(1,Math.min(list.length,Math.floor(Number(id)||1))),def=list[n-1];g.lab={id:n,def:def,links:0,hits:0,cooldown:0,weapon:'hammer',weaponCooldown:0,shield:0,shot:null,attack:null,nextAttack:5};
- g.mission={kind:'lab',label:def.blast?'安全爆破 '+def.safe+' 处':'共振 '+def.links+' 次 / 武器命中 '+def.hits+' 次',help:def.tip+' 点建筑或塔图标切换关闭→红＋→蓝−；右下角按本关目标切换技能。留4件金属可释放武器，工具里可换装、回收和调镜头。拆完三塔并达到回收配额即可过关。',value:0,target:1,nodes:[],passenger:null};
+ g.mission={kind:'lab',label:def.blast?'安全爆破 '+def.safe+' 处'+(def.ground?' / 地面交付 '+def.ground+' 件':''):'共振 '+def.links+' 次 / 武器命中 '+def.hits+' 次',help:def.blast?def.tip+' 黄色箭头显示预计倾倒方向。布设后远程引爆，倒计时中点击右下角撤离。地面交付需运回中枢，无人机只计普通回收。拆完三楼并达到回收配额即可结算。':def.tip+' 点建筑或塔图标切换关闭→红＋→蓝−；右下角按本关目标切换技能。留4件金属可释放武器，工具里可换装、回收和调镜头。拆完三塔并达到回收配额即可过关。',value:0,target:1,nodes:[],passenger:null};
  g.buildings.forEach(function(b){b.pole=0;b.accent='#65edff';b.bolts.forEach(function(a){a.hp=a.maxHp=(def.armor||1);});});
  if(def.boss){var b=g.buildings[2];b.floors=7;b.boss=true;b.bolts.forEach(function(a){a.hp=a.maxHp=4;});}
  g.dropScrap(g.car.x,g.car.y,6);g.total+=6;g.quota=Math.ceil(g.total*.7);
  }
- function ready(g){var l=g.lab;return l.links>=l.def.links&&l.hits>=l.def.hits&&(!l.def.blast||g.blast.detonated>=l.def.blast&&g.blast.safeDetonated>=l.def.safe);}
+ function blastReady(g){var d=g.lab.def;return !d.blast||g.blast.detonated>=d.blast&&g.blast.safeDetonated>=d.safe;}
+ function ready(g){var l=g.lab;return l.links>=l.def.links&&l.hits>=l.def.hits&&blastReady(g)&&g.groundDelivered>=(l.def.ground||0);}
+ function reward(g){var safety=g.lab.def.blast&&blastReady(g)&&g.blast.detonated===g.blast.safeDetonated?20:0,haul=g.lab.def.ground&&g.groundDelivered>=g.lab.def.ground?10:0;return{coins:40+safety+haul,xp:0,parts:0,levels:0,safety:safety,haul:haul};}
  function blocked(g,b){var l=g.lab;if(!l)return false;if(l.def.boss&&b.id===2&&g.buildings.some(function(o){return o!==b&&o.state==='standing';}))return true;return false;}
  function preserve(g,b){var l=g.lab;if(!l)return false;return l.links<l.def.links||(!ready(g)&&g.buildings.filter(function(o){return o.state==='standing';}).length===1);}
  function pole(g,id){var b=g.buildings[id];if(!g.lab||g.done||!b||b.state!=='standing')return false;b.pole=b.pole===0?1:b.pole===1?-1:0;return true;}
@@ -51,5 +57,5 @@
  if(l.def.boss&&g.buildings[2].state==='standing'){if(!l.attack&&g.time>=l.nextAttack)l.attack={x:g.car.x,y:g.car.y,left:1.8};if(l.attack){l.attack.left-=dt;if(l.attack.left<=0){if(l.shield<=0&&Math.hypot(g.car.x-l.attack.x,g.car.y-l.attack.y)<48){g.energy=Math.max(0,g.energy-.4);g.effects.push({x:g.car.x,y:g.car.y,text:'磁场干扰 · 能量损失',life:1});}g.emitFx('pulse',l.attack.x,l.attack.y);l.attack=null;l.nextAttack=g.time+5;}}}
  g.mission.value=ready(g)?1:0;
  }
- var api={list:list,layouts:layouts,weapons:weapons,init:init,blocked:blocked,preserve:preserve,pole:pole,resonate:resonate,equip:equip,fire:fire,update:update,ready:ready};if(typeof module!=='undefined')module.exports=api;else root.MagnetLab=api;
+ var api={list:list,layouts:layouts,weapons:weapons,init:init,blocked:blocked,preserve:preserve,pole:pole,resonate:resonate,equip:equip,fire:fire,update:update,ready:ready,blastReady:blastReady,reward:reward};if(typeof module!=='undefined')module.exports=api;else root.MagnetLab=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

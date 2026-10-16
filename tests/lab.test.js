@@ -3,8 +3,8 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),core=requ
 const tick=(g,sec)=>{for(let i=0;i<Math.ceil(sec/.02);i++)g.update(.02);};
 const make=id=>new core.Game(123,1,{}, {lab:id});
 function pair(g,same=false){g.setPole(0);g.setPole(1);if(!same)g.setPole(1);}
-test('ten experiments use isolated objectives, fixed vehicles and real initial scrap',()=>{
- assert.equal(core.lab.list.length,10);for(let id=1;id<=10;id++){const g=make(id);assert.equal(g.stage,null);assert.equal(g.lab.id,id);assert.equal(g.mission.kind,'lab');assert.equal(g.scrap.length,6);assert.equal(g.total,g.buildings.reduce((n,b)=>n+b.mass+3,6));assert.equal(g.mission.value,0);}
+test('twelve experiments use isolated objectives, fixed vehicles and real initial scrap',()=>{
+ assert.equal(core.lab.list.length,12);for(let id=1;id<=core.lab.list.length;id++){const g=make(id);assert.equal(g.stage,null);assert.equal(g.lab.id,id);assert.equal(g.mission.kind,'lab');assert.equal(g.scrap.length,6);assert.equal(g.total,g.buildings.reduce((n,b)=>n+b.mass+3,6));assert.equal(g.mission.value,0);}
  assert.equal(new core.Game(1,1).lab,undefined);
 });
 test('polarity is deliberate, enforces teaching rule and cooldown; attraction differs from repulsion',()=>{
@@ -21,14 +21,17 @@ test('shield blocks storm slowdown and boss interference; boss shield falls only
 test('unfinished experiments preserve targets and final four metal pieces against unload and drone softlocks',()=>{
  const g=make(6);g.buildings.forEach(b=>b.bolts.forEach(a=>g.damageAnchor(b,a,100)));assert.equal(g.demolished,0);assert.ok(g.buildings.every(b=>b.bolts.some(a=>!a.removed)));g.scrap=[];g.delivered=g.total-4;g.cargo=Array.from({length:4},()=>({x:67,y:584}));g.car={x:67,y:584};assert.equal(g.dispatch(),false);tick(g,1);assert.equal(g.cargo.length,4);g.lab.hits=2;assert.equal(g.dispatch(),true);assert.equal(g.cargo.length,0);
 });
-test('all ten experiments finish with actual navigation and zero upgrades, preserving all metal',()=>{
- for(let id=1;id<=10;id++){
+test('all twelve experiments finish with actual navigation and zero upgrades, preserving all metal',()=>{
+ for(let id=1;id<=core.lab.list.length;id++){
   const g=make(id);pair(g,id===2);g.equipWeapon(g.lab.def.weapon||'hammer');
   for(let frame=0;frame<90000&&!g.done;frame++){
    if(g.lab.links<g.lab.def.links)g.resonate();
-   if(g.lab.def.blast&&!core.lab.ready(g)){
+   if(g.lab.def.blast&&!core.lab.blastReady(g)){
     if(g.blast.timer>0){if(!g.navGoal){const p=require('../src/guidance')(g).target;g.navigate(p.x,p.y);}g.update(.02);continue;}
     if(g.blast.cooldown<=0&&g.plantBlast()){g.armBlast();const p=require('../src/guidance')(g).target;g.navigate(p.x,p.y);g.update(.02);continue;}
+   }
+   if(g.lab.def.ground&&g.groundDelivered<g.lab.def.ground&&g.cargo.length>=Math.min(6,g.lab.def.ground-g.groundDelivered)){
+    if(!g.navGoal||Math.hypot(g.navGoal.x-67,g.navGoal.y-584)>15)g.navigate(67,584);g.update(.02);continue;
    }
    g.fireWeapon();
    if(g.cargo.length>=g.capacity()||g.demolished===3&&g.cargo.length){if(!g.dispatch()&&!g.navGoal)g.navigate(67,584);}
@@ -56,4 +59,13 @@ test('icon control edges select weapons without driving or firing, and missing c
  click(186,577);assert.equal(g.lab.weapon,'drill');assert.equal(g.target,null);assert.equal(g.lab.hits,0);click(237,546);assert.equal(g.lab.weapon,'shield');click(65,546);assert.equal(g.lab.weapon,'hammer');
  const b=g.buildings[0];g.car={x:b.x,y:b.y+b.h/2+16};g.cargo=Array.from({length:4},()=>({x:g.car.x,y:g.car.y}));click(358,577);assert.equal(g.lab.hits,1);assert.equal(g.target,null);click(323,546);assert.equal(g.lab.hits,1);assert.ok(texts.includes('武器冷却中'));
  click(65,474);assert.equal(b.pole,1);click(65,474);assert.equal(b.pole,-1);click(65,474);assert.equal(b.pole,0);
+});
+test('haul contracts reserve ground materials against drone softlocks and reward clean work within a cap',()=>{
+ for(const id of [11,12]){
+  const g=make(id);g.blast.detonated=g.blast.safeDetonated=g.lab.def.safe;assert.equal(core.lab.blastReady(g),true);assert.equal(core.lab.ready(g),false);
+  g.delivered=g.total-g.lab.def.ground-2;g.cargo=Array.from({length:g.lab.def.ground+2},()=>({x:67,y:584}));
+  assert.equal(g.dispatch(),true);assert.equal(g.cargo.length,g.lab.def.ground);assert.equal(g.groundDelivered,0);g.dispatchCooldown=0;assert.equal(g.dispatch(),false);
+  assert.equal(core.lab.reward(g).coins,60);g.scrap=[];g.car={x:67,y:584};tick(g,2);assert.equal(g.groundDelivered,g.lab.def.ground);assert.equal(core.lab.ready(g),true);assert.equal(core.lab.reward(g).coins,70);
+  g.blast.detonated++;assert.equal(core.lab.reward(g).coins,50,'an unsafe blast loses only the clean-work bonus, never traps the player');
+ }
 });
