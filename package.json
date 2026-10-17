@@ -1,16 +1,14 @@
 {
   "name": "magnet-crew",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "private": true,
   "description": "Drive, magnetize, demolish and recycle — WeChat mini game",
   "scripts": {
     "start": "node server.js",
     "test": "node --test tests/salvage.test.js tests/cloud.test.js tests/social.test.js tests/stages.test.js tests/progression.test.js tests/missions.test.js tests/scene3d.test.js tests/experience.test.js tests/lab.test.js tests/blast.test.js tests/version.test.js",
     "version:check": "node scripts/version.cjs check",
-    "version:patch": "node scripts/version.cjs patch",
-    "version:minor": "node scripts/version.cjs minor",
-    "version:major": "node scripts/version.cjs major",
-    "upload": "node scripts/upload.cjs"
+    "upload": "node scripts/upload.cjs",
+    "version:next": "node scripts/version.cjs next"
   },
   "engines": {
     "node": ">=18"
