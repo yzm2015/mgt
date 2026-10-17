@@ -25,7 +25,7 @@
     if(this.stage)layouts=this.stage.layout.map(function(p){return{x:p[0],y:p[1],w:p[2],h:p[3],floors:p[4]};});
     if(options&&options.lab)layouts=lab.layouts[Math.max(0,Math.min(lab.layouts.length-1,Math.floor(Number(options.lab)||1)-1))].map(function(p){return{x:p[0],y:p[1],w:p[2],h:p[3],floors:p[4]};});
     for(var i=0;i<layouts.length;i++){
-      var p=layouts[i],shiftX=!this.stage&&this.level>1?Math.round((this.random()-.5)*20):0,shiftY=!this.stage&&this.level>1?Math.round((this.random()-.5)*12):0,b={id:i,x:p.x+shiftX,y:p.y+shiftY,w:p.w,h:p.h,floors:p.floors+(this.stage?0:Math.min(3,Math.floor(this.level/3))),accent:this.stage?this.stage.color:null,state:'standing',fall:0,bolts:[],color:i};
+      var p=layouts[i],shiftX=!this.stage&&this.level>1?Math.round((this.random()-.5)*20):0,shiftY=!this.stage&&this.level>1?Math.round((this.random()-.5)*12):0,b={id:i,x:p.x+shiftX,y:p.y+shiftY,w:p.w,h:p.h,floors:p.floors+(this.stage?0:Math.min(3,Math.floor(this.level/3))),accent:this.stage?this.stage.color:null,state:'standing',fall:0,bolts:[],color:i,model:this.stage&&this.stage.style?this.stage.style:null};
       var points=[[-p.w/2-8,15],[p.w/2+8,15],[0,p.h/2+7]];
       for(var j=0;j<points.length;j++)b.bolts.push({x:b.x+points[j][0],y:b.y+points[j][1],hp:(this.stage?this.stage.armor||1:1)*(this.risk?1.4:1),maxHp:(this.stage?this.stage.armor||1:1)*(this.risk?1.4:1),removed:false});
       b.mass=12+b.floors*3;this.total+=b.mass+3;this.buildings.push(b);

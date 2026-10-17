@@ -8,7 +8,7 @@ function route(g,target){
  for(let h=0;h<queue.length&&!parents.has(goal);h++){const i=queue[h],n=nodes[i];for(const [dx,dy]of [[10,0],[-10,0],[0,10],[0,-10]]){const next=lookup.get((n.x+dx)+':'+(n.y+dy));if(next!==undefined&&!parents.has(next)){parents.set(next,i);queue.push(next);}}}
  assert.ok(parents.has(goal),'route to target must remain reachable');let i=goal,path=[];while(i!==null){path.unshift(nodes[i]);i=parents.get(i);}for(const p of path){g.move(p.x,p.y);tick(g,.12);}g.target=null;tick(g,.3);
 }
-test('all eight standard and storm contracts can be completed with real movement and zero upgrades',()=>{
+test('all twelve standard and storm contracts can be completed with real movement and zero upgrades',()=>{
  for(const risk of [false,true])for(const stage of core.stages){const g=new core.Game(core.hash('yard-'+stage.id),stage.id,{magnet:0,cargo:0},{stage:stage.id,risk});
   assert.equal(g.stage.name,stage.name);
   if(g.incidents.length){tick(g,19);for(const e of g.incidents){route(g,e);if(e.kind==='fire'){core.missions.respond(g);tick(g,7);}else{tick(g,.3);route(g,core.depot);tick(g,1);}assert.equal(e.state,'resolved');}}
@@ -20,8 +20,8 @@ test('all eight standard and storm contracts can be completed with real movement
    if(g.mission.kind==='charge'){tick(g,30);g.activate();tick(g,1);}
    if(g.mission.kind==='dash'){tick(g,4);g.dash();tick(g,.08);g.target=null;}
   }
-  for(let attempts=0;g.demolished<3&&attempts<20;attempts++){const b=g.buildings.find(b=>b.state==='standing'),a=b.bolts.find(a=>!a.removed);route(g,a);g.activate();tick(g,4);}
-  assert.equal(g.demolished,3,stage.name+' must allow all anchors to be reached');tick(g,2);
+  for(let attempts=0;g.demolished<g.buildings.length&&attempts<20;attempts++){const b=g.buildings.find(b=>b.state==='standing'),a=b.bolts.find(a=>!a.removed);route(g,a);g.activate();tick(g,4);}
+  assert.equal(g.demolished,g.buildings.length,stage.name+' must allow all anchors to be reached');tick(g,2);
   for(let trips=0;!g.done&&trips<180;trips++){if(g.cargo.length>=g.capacity()){if(g.mission.kind==='ground'&&g.mission.value<g.mission.target){route(g,core.depot);tick(g,2);}else{g.dispatch();tick(g,17);}}else if(g.scrap.length)route(g,g.scrap[0]);else{g.dispatch();tick(g,17);}}
   assert.equal(g.mission.value,g.mission.target,stage.name+' mandatory condition');assert.equal(g.done,true,stage.name+' must meet recovery and mission conditions');assert.ok(g.time<1800);assert.equal(g.scrap.length+g.cargo.length+g.delivered,g.total);assert.ok(core.stageStars(g)>=1);
  }
@@ -31,4 +31,7 @@ test('campaign stars and action goals are independent of daily equipment and sav
  const s=core.cleanSave({stageBest:{1:{stars:3,seconds:45},2:{stars:9,seconds:-1},100:{stars:3,seconds:1}}});assert.deepEqual(s.stageBest,{'1':{stars:3,seconds:45}});assert.deepEqual(core.cleanSave({}).stageBest,{});
  const validate=require('../cloudfunctions/mgt_gateway/save-schema').validate;assert.deepEqual(validate(s).stageBest,s.stageBest);assert.throws(()=>validate(Object.assign({},s,{stageBest:{1:{stars:4,seconds:1}}})),/MGT_BAD_SAVE/);
  const daily=new core.Game(core.hash(core.day()),4,{magnet:0,cargo:0});assert.equal(daily.stage,null);assert.equal(daily.capacity(),12);
+});
+test('all twelve campaign records survive local and cloud validation with a bounded stage allowlist',()=>{
+ const raw={level:12,stageBest:Object.fromEntries(core.stages.map(s=>[s.id,{stars:2,seconds:100}]))},clean=core.cleanSave(raw),validate=require('../cloudfunctions/mgt_gateway/save-schema').validate;assert.equal(Object.keys(clean.stageBest).length,12);assert.deepEqual(validate(clean).stageBest,clean.stageBest);assert.throws(()=>validate({...clean,stageBest:{13:{stars:1,seconds:1}}}),/MGT_BAD_SAVE/);
 });
