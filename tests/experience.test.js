@@ -32,3 +32,6 @@ test('reward count-up can be skipped without delaying or duplicating actual prog
  const start=require('../src/salvage-app');let frame,input,g,stored,now=1000,texts=[];const ctx=new Proxy({fillText:t=>texts.push(t)},{get:(o,k)=>o[k]||(()=>{}),set:(o,k,v)=>(o[k]=v,true)});class Game extends core.Game{constructor(...args){super(...args);g=this;}}
  start({canvas:{width:390,height:720,getContext:()=>ctx},load:()=>({}),save:s=>{stored=structuredClone(s);return true;},frame:f=>frame=f,input:f=>input=f,visibility:()=>{},event:()=>{},share:()=>{}},Object.assign({},core,{Game}));function draw(){texts=[];frame(now+=16);}function click(x,y){input('down',{x,y});input('up',{x,y});draw();}draw();click(100,578);g.done=true;g.delivered=60;g.time=200;g.maxCombo=1;draw();assert.equal(stored.coins,165);assert.ok(texts.includes('+0'));click(100,370);assert.ok(texts.includes('+165'));assert.ok(texts.includes('+95'));assert.equal(stored.coins,165);assert.equal(stored.records.completed,1);
 });
+test('incident feedback never announces the unrelated main mission as complete',()=>{
+ const g=new core.Game(1,8,{}, {stage:8}),fx=require('../src/effects')(false);g.time=19;g.update(.02);fx.update(g,.02);assert.ok(fx.texts().some(t=>t.text==='应急状态更新'));assert.ok(!fx.texts().some(t=>t.text==='主线完成'));assert.equal(g.mission.value,0);
+});

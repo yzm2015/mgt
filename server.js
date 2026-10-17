@@ -2,7 +2,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const assets = new Set(['/test.html', '/src/lab.js', '/src/salvage-core.js', '/src/salvage-app.js', '/src/neo-art.js', '/src/social.js', '/src/stages.js', '/src/progression.js', '/src/missions.js', '/src/scene3d.js', '/src/navigation.js', '/src/effects.js', '/src/guidance.js']);
+const assets = new Set(['/test.html', '/src/version.js', '/src/lab.js', '/src/salvage-core.js', '/src/salvage-app.js', '/src/neo-art.js', '/src/social.js', '/src/stages.js', '/src/progression.js', '/src/missions.js', '/src/scene3d.js', '/src/navigation.js', '/src/effects.js', '/src/guidance.js']);
 const port = Number(process.env.PORT) || 8766;
 http.createServer((req,res)=>{
   let pathname;

@@ -8,6 +8,7 @@
    if(e.type==='core')texts.push({x:e.x,z:e.y,text:'核心击破 ×'+e.value,life:1.05,max:1.05,color:'#ffbd72'});
    if(e.type==='collapse')texts.push({x:e.x,z:e.y,text:'链式坍塌 +500',life:1.4,max:1.4,color:'#ffbd72'});
    if(e.type==='delivery')texts.push({x:e.x,z:e.y,text:'回收 +'+e.value,life:.85,max:.85,color:'#96ffd4'});
+   if(e.type==='incident')texts.push({x:e.x,z:e.y,text:'应急状态更新',life:1.6,max:1.6,color:'#e0b660'});
    if(e.type==='objective')texts.push({x:e.x,z:e.y,text:'主线完成',life:1.6,max:1.6,color:'#96ffd4'});
    if(e.type==='explosion'||e.type==='collapse'||e.type==='impact'){for(var di=0;di<(reduced?2:6);di++){var da=di*2.4;dust.push({x:e.x+Math.cos(da)*8,z:e.y+Math.sin(da)*8,y:6,size:10+random()*10,vx:Math.cos(da)*18,vz:Math.sin(da)*18,life:2.6,max:2.6});}dust=dust.slice(-(reduced?4:24));}
    particles=particles.slice(-(reduced?24:128));bursts=bursts.slice(-12);texts=texts.slice(-7);

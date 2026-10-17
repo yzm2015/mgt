@@ -1,0 +1,10 @@
+'use strict';
+const fs=require('node:fs'),path=require('node:path'),{spawnSync}=require('node:child_process');
+const root=path.join(__dirname,'..');
+const checked=spawnSync(process.execPath,[path.join(__dirname,'version.cjs'),'check'],{stdio:'inherit'});
+if(checked.status!==0)process.exit(checked.status||1);
+const version=JSON.parse(fs.readFileSync(path.join(root,'package.json'))).version;
+const quote=s=>"'"+s.replace(/'/g,"''")+"'";
+const args=['D:/Program Files (x86)/Tencent/微信web开发者工具/cli.bat','upload','--project',root,'--version',version,'--desc','V'+version+' 救援引导与版本管理','--info-output',path.join(root,'..','wechat-upload-v'+version+'.local.json')];
+const result=spawnSync('powershell.exe',['-NoProfile','-Command','& '+args.map(quote).join(' ')],{stdio:'inherit',windowsHide:true});
+if(result.error)console.error(result.error.message);process.exitCode=result.status===null?1:result.status;

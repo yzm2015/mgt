@@ -47,3 +47,7 @@ test('vehicle swaps require the depot, preserve cargo, and skins do not affect d
 test('simultaneous incidents let the player choose fire first and fall back to the pedestrian after resolution',()=>{
  const g=yard(8);g.time=19;step(g,.04);g.incidentFocus=1;assert.equal(core.missions.incident(g).kind,'fire');const fire=g.incidents[1];g.car={x:fire.x,y:fire.y};core.missions.respond(g);step(g,6.2);assert.equal(fire.state,'resolved');assert.equal(core.missions.incident(g).kind,'person');assert.equal(g.incidents[0].state,'active');
 });
+test('guided response starts firefighting on arrival, returns a rescued person, and yields to manual driving',()=>{
+ const g=yard(8);g.time=19;step(g,.04);g.incidentFocus=1;const fire=g.incidents[1];assert.equal(core.missions.respond(g),true);assert.equal(fire.queued,true);g.move(100,550);assert.equal(fire.queued,false);core.missions.respond(g);g.stop();g.car={x:fire.x,y:fire.y};step(g,.04);assert.equal(fire.responding,true);assert.equal(fire.queued,false);assert.ok(fire.progress>0);
+ g.incidentFocus=0;const person=g.incidents[0];assert.equal(core.missions.respond(g),true);assert.equal(person.autoReturn,true);g.car={x:person.x,y:person.y};step(g,.04);assert.equal(person.state,'aboard');assert.ok(Math.hypot(g.navGoal.x-67,g.navGoal.y-584)<12);g.move(200,600);assert.equal(g.navGoal,null);assert.equal(person.autoReturn,false);
+});

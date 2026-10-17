@@ -1,0 +1,3 @@
+'use strict';
+const {test}=require('node:test'),assert=require('node:assert/strict'),{parse,next}=require('../scripts/version.cjs');
+test('bounded versions increment and carry without producing zero components',()=>{assert.deepEqual(parse('V1.1.1'),[1,1,1]);assert.equal(next('1.1.1'),'1.1.2');assert.equal(next('1.7.9999'),'1.8.1');assert.equal(next('1.999.9999'),'2.1.1');assert.equal(next('1.999.9','minor'),'2.1.1');assert.equal(next('2.8.9','major'),'3.1.1');assert.throws(()=>next('9.999.9999'));for(const s of ['01.1.1','1.0.1','1.1000.1','1.1.10000','18.0.0','1.1.1junk'])assert.throws(()=>parse(s));});
